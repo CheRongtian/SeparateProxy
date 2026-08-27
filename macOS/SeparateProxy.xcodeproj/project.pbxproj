@@ -1,0 +1,641 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		300000000000000000000001 /* OutlineAccessKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000001 /* OutlineAccessKey.swift */; };
+		300000000000000000000002 /* SingBoxConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000002 /* SingBoxConfiguration.swift */; };
+		300000000000000000000003 /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000003 /* HelperProtocol.swift */; };
+		300000000000000000000011 /* SeparateProxyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000011 /* SeparateProxyApp.swift */; };
+		300000000000000000000012 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000012 /* ContentView.swift */; };
+		300000000000000000000013 /* ProxyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000013 /* ProxyViewModel.swift */; };
+		300000000000000000000014 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000014 /* KeychainStore.swift */; };
+		300000000000000000000015 /* ApplicationDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000015 /* ApplicationDiscovery.swift */; };
+		300000000000000000000016 /* HelperClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000016 /* HelperClient.swift */; };
+		300000000000000000000021 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000021 /* main.swift */; };
+		300000000000000000000022 /* HelperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000022 /* HelperService.swift */; };
+		300000000000000000000023 /* SingBoxController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000023 /* SingBoxController.swift */; };
+		300000000000000000000024 /* SecureRuntimeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000024 /* SecureRuntimeStore.swift */; };
+		300000000000000000000031 /* OutlineAccessKeyParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000031 /* OutlineAccessKeyParserTests.swift */; };
+		300000000000000000000032 /* SingBoxConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000032 /* SingBoxConfigurationTests.swift */; };
+		300000000000000000000041 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
+		300000000000000000000042 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
+		300000000000000000000043 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
+		300000000000000000000051 /* SeparateProxyHelper in Embed Helper and sing-box */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* SeparateProxyHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		300000000000000000000052 /* ../bin/sing-box in Embed Helper and sing-box */ = {isa = PBXBuildFile; fileRef = 100000000000000000000041 /* ../bin/sing-box */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		300000000000000000000053 /* com.cherongtian.SeparateProxy.Helper.plist in Embed LaunchDaemon */ = {isa = PBXBuildFile; fileRef = 100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		800000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000003;
+			remoteInfo = SeparateProxyCore;
+		};
+		800000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000002;
+			remoteInfo = SeparateProxyHelper;
+		};
+		800000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000003;
+			remoteInfo = SeparateProxyCore;
+		};
+		800000000000000000000004 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000003;
+			remoteInfo = SeparateProxyCore;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		400000000000000000000011 /* Embed Helper and sing-box */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 7;
+			files = (
+				300000000000000000000051 /* SeparateProxyHelper in Embed Helper and sing-box */,
+				300000000000000000000052 /* ../bin/sing-box in Embed Helper and sing-box */,
+			);
+			name = "Embed Helper and sing-box";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000012 /* Embed LaunchDaemon */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchDaemons;
+			dstSubfolderSpec = 1;
+			files = (
+				300000000000000000000053 /* com.cherongtian.SeparateProxy.Helper.plist in Embed LaunchDaemon */,
+			);
+			name = "Embed LaunchDaemon";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		100000000000000000000001 /* OutlineAccessKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineAccessKey.swift; sourceTree = "<group>"; };
+		100000000000000000000002 /* SingBoxConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingBoxConfiguration.swift; sourceTree = "<group>"; };
+		100000000000000000000003 /* HelperProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperProtocol.swift; sourceTree = "<group>"; };
+		100000000000000000000011 /* SeparateProxyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeparateProxyApp.swift; sourceTree = "<group>"; };
+		100000000000000000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		100000000000000000000013 /* ProxyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyViewModel.swift; sourceTree = "<group>"; };
+		100000000000000000000014 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		100000000000000000000015 /* ApplicationDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationDiscovery.swift; sourceTree = "<group>"; };
+		100000000000000000000016 /* HelperClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperClient.swift; sourceTree = "<group>"; };
+		100000000000000000000017 /* SeparateProxy.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SeparateProxy.entitlements; sourceTree = "<group>"; };
+		100000000000000000000021 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		100000000000000000000022 /* HelperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperService.swift; sourceTree = "<group>"; };
+		100000000000000000000023 /* SingBoxController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingBoxController.swift; sourceTree = "<group>"; };
+		100000000000000000000024 /* SecureRuntimeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureRuntimeStore.swift; sourceTree = "<group>"; };
+		100000000000000000000031 /* OutlineAccessKeyParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineAccessKeyParserTests.swift; sourceTree = "<group>"; };
+		100000000000000000000032 /* SingBoxConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingBoxConfigurationTests.swift; sourceTree = "<group>"; };
+		100000000000000000000041 /* ../bin/sing-box */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = "../bin/sing-box"; sourceTree = "<group>"; };
+		100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.cherongtian.SeparateProxy.Helper.plist; sourceTree = "<group>"; };
+		100000000000000000000051 /* Project.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Project.xcconfig; sourceTree = "<group>"; };
+		100000000000000000000052 /* DeveloperSettings.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = DeveloperSettings.xcconfig.example; sourceTree = "<group>"; };
+		200000000000000000000001 /* SeparateProxy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SeparateProxy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000002 /* SeparateProxyHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = SeparateProxyHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000003 /* libSeparateProxyCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libSeparateProxyCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000004 /* SeparateProxyCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeparateProxyCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		400000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000041 /* libSeparateProxyCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000042 /* libSeparateProxyCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000043 /* libSeparateProxyCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		000000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000004 /* Core */,
+				000000000000000000000005 /* App */,
+				000000000000000000000006 /* Helper */,
+				000000000000000000000007 /* Resources */,
+				000000000000000000000008 /* Tests */,
+				000000000000000000000009 /* Config */,
+				100000000000000000000041 /* ../bin/sing-box */,
+				000000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		000000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* SeparateProxy.app */,
+				200000000000000000000002 /* SeparateProxyHelper */,
+				200000000000000000000003 /* libSeparateProxyCore.a */,
+				200000000000000000000004 /* SeparateProxyCoreTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		000000000000000000000004 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000001 /* OutlineAccessKey.swift */,
+				100000000000000000000002 /* SingBoxConfiguration.swift */,
+				100000000000000000000003 /* HelperProtocol.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		000000000000000000000005 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000011 /* SeparateProxyApp.swift */,
+				100000000000000000000012 /* ContentView.swift */,
+				100000000000000000000013 /* ProxyViewModel.swift */,
+				100000000000000000000014 /* KeychainStore.swift */,
+				100000000000000000000015 /* ApplicationDiscovery.swift */,
+				100000000000000000000016 /* HelperClient.swift */,
+				100000000000000000000017 /* SeparateProxy.entitlements */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		000000000000000000000006 /* Helper */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000021 /* main.swift */,
+				100000000000000000000022 /* HelperService.swift */,
+				100000000000000000000023 /* SingBoxController.swift */,
+				100000000000000000000024 /* SecureRuntimeStore.swift */,
+			);
+			path = Helper;
+			sourceTree = "<group>";
+		};
+		000000000000000000000007 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		000000000000000000000008 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000031 /* OutlineAccessKeyParserTests.swift */,
+				100000000000000000000032 /* SingBoxConfigurationTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		000000000000000000000009 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000051 /* Project.xcconfig */,
+				100000000000000000000052 /* DeveloperSettings.xcconfig.example */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		500000000000000000000001 /* SeparateProxy */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000002 /* Build configuration list for PBXNativeTarget "SeparateProxy" */;
+			buildPhases = (
+				400000000000000000000101 /* Sources */,
+				400000000000000000000001 /* Frameworks */,
+				400000000000000000000201 /* Resources */,
+				400000000000000000000011 /* Embed Helper and sing-box */,
+				400000000000000000000012 /* Embed LaunchDaemon */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				800000000000000000000011 /* PBXTargetDependency */,
+				800000000000000000000012 /* PBXTargetDependency */,
+			);
+			name = SeparateProxy;
+			productName = SeparateProxy;
+			productReference = 200000000000000000000001 /* SeparateProxy.app */;
+			productType = "com.apple.product-type.application";
+		};
+		500000000000000000000002 /* SeparateProxyHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000003 /* Build configuration list for PBXNativeTarget "SeparateProxyHelper" */;
+			buildPhases = (
+				400000000000000000000102 /* Sources */,
+				400000000000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				800000000000000000000013 /* PBXTargetDependency */,
+			);
+			name = SeparateProxyHelper;
+			productName = SeparateProxyHelper;
+			productReference = 200000000000000000000002 /* SeparateProxyHelper */;
+			productType = "com.apple.product-type.tool";
+		};
+		500000000000000000000003 /* SeparateProxyCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000004 /* Build configuration list for PBXNativeTarget "SeparateProxyCore" */;
+			buildPhases = (
+				400000000000000000000103 /* Sources */,
+				400000000000000000000003 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SeparateProxyCore;
+			productName = SeparateProxyCore;
+			productReference = 200000000000000000000003 /* libSeparateProxyCore.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+		500000000000000000000004 /* SeparateProxyCoreTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000005 /* Build configuration list for PBXNativeTarget "SeparateProxyCoreTests" */;
+			buildPhases = (
+				400000000000000000000104 /* Sources */,
+				400000000000000000000004 /* Frameworks */,
+				400000000000000000000204 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				800000000000000000000014 /* PBXTargetDependency */,
+			);
+			name = SeparateProxyCoreTests;
+			productName = SeparateProxyCoreTests;
+			productReference = 200000000000000000000004 /* SeparateProxyCoreTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		000000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					500000000000000000000001 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					500000000000000000000002 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					500000000000000000000003 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					500000000000000000000004 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 500000000000000000000003;
+					};
+				};
+			};
+			buildConfigurationList = 700000000000000000000001 /* Build configuration list for PBXProject "SeparateProxy" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 000000000000000000000002;
+			productRefGroup = 000000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				500000000000000000000001 /* SeparateProxy */,
+				500000000000000000000002 /* SeparateProxyHelper */,
+				500000000000000000000003 /* SeparateProxyCore */,
+				500000000000000000000004 /* SeparateProxyCoreTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		400000000000000000000201 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000204 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		400000000000000000000101 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000011 /* SeparateProxyApp.swift in Sources */,
+				300000000000000000000012 /* ContentView.swift in Sources */,
+				300000000000000000000013 /* ProxyViewModel.swift in Sources */,
+				300000000000000000000014 /* KeychainStore.swift in Sources */,
+				300000000000000000000015 /* ApplicationDiscovery.swift in Sources */,
+				300000000000000000000016 /* HelperClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000102 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000021 /* main.swift in Sources */,
+				300000000000000000000022 /* HelperService.swift in Sources */,
+				300000000000000000000023 /* SingBoxController.swift in Sources */,
+				300000000000000000000024 /* SecureRuntimeStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000103 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000001 /* OutlineAccessKey.swift in Sources */,
+				300000000000000000000002 /* SingBoxConfiguration.swift in Sources */,
+				300000000000000000000003 /* HelperProtocol.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000104 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000031 /* OutlineAccessKeyParserTests.swift in Sources */,
+				300000000000000000000032 /* SingBoxConfigurationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		800000000000000000000011 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000003 /* SeparateProxyCore */;
+			targetProxy = 800000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		800000000000000000000012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000002 /* SeparateProxyHelper */;
+			targetProxy = 800000000000000000000002 /* PBXContainerItemProxy */;
+		};
+		800000000000000000000013 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000003 /* SeparateProxyCore */;
+			targetProxy = 800000000000000000000003 /* PBXContainerItemProxy */;
+		};
+		800000000000000000000014 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000003 /* SeparateProxyCore */;
+			targetProxy = 800000000000000000000004 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		600000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 100000000000000000000051 /* Project.xcconfig */;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		600000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 100000000000000000000051 /* Project.xcconfig */;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		600000000000000000000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = App/SeparateProxy.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(SP_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = SeparateProxy;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SP_APP_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Debug;
+		};
+		600000000000000000000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = App/SeparateProxy.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(SP_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = SeparateProxy;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SP_APP_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Release;
+		};
+		600000000000000000000021 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = "$(SP_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SP_APP_BUNDLE_IDENTIFIER).Helper";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Debug;
+		};
+		600000000000000000000022 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = "$(SP_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SP_APP_BUNDLE_IDENTIFIER).Helper";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Release;
+		};
+		600000000000000000000031 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				ENABLE_TESTABILITY = YES;
+				MACH_O_TYPE = staticlib;
+				PRODUCT_MODULE_NAME = SeparateProxyCore;
+				PRODUCT_NAME = SeparateProxyCore;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Debug;
+		};
+		600000000000000000000032 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				MACH_O_TYPE = staticlib;
+				PRODUCT_MODULE_NAME = SeparateProxyCore;
+				PRODUCT_NAME = SeparateProxyCore;
+				SKIP_INSTALL = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Release;
+		};
+		600000000000000000000041 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SP_APP_BUNDLE_IDENTIFIER).CoreTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Debug;
+		};
+		600000000000000000000042 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SP_APP_BUNDLE_IDENTIFIER).CoreTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		700000000000000000000001 /* Build configuration list for PBXProject "SeparateProxy" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				600000000000000000000001 /* Debug */,
+				600000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		700000000000000000000002 /* Build configuration list for PBXNativeTarget "SeparateProxy" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				600000000000000000000011 /* Debug */,
+				600000000000000000000012 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		700000000000000000000003 /* Build configuration list for PBXNativeTarget "SeparateProxyHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				600000000000000000000021 /* Debug */,
+				600000000000000000000022 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		700000000000000000000004 /* Build configuration list for PBXNativeTarget "SeparateProxyCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				600000000000000000000031 /* Debug */,
+				600000000000000000000032 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		700000000000000000000005 /* Build configuration list for PBXNativeTarget "SeparateProxyCoreTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				600000000000000000000041 /* Debug */,
+				600000000000000000000042 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 000000000000000000000001 /* Project object */;
+}

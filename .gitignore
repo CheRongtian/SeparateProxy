@@ -1,3 +1,17 @@
 .DS_Store
 config.json
 sing-box.log
+
+# Local secrets
+Secrets.xcconfig
+*.local.xcconfig
+/macOS/Config/DeveloperSettings.local.xcconfig
+
+# Swift
+.build/
+.swiftpm/
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate

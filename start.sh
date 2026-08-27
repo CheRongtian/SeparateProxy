@@ -1,6 +1,7 @@
 #!/bin/zsh
 
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="${0:A:h}"
 CONFIG_PATH="$SCRIPT_DIR/config.json"

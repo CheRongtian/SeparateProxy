@@ -1,0 +1,3 @@
+// Copy this file to DeveloperSettings.local.xcconfig and replace both values.
+SP_DEVELOPMENT_TEAM = ABCDE12345
+SP_APP_BUNDLE_IDENTIFIER = com.example.SeparateProxy

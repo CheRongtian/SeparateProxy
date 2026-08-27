@@ -1,0 +1,4 @@
+SP_DEVELOPMENT_TEAM =
+SP_APP_BUNDLE_IDENTIFIER = com.example.SeparateProxy
+
+#include? "DeveloperSettings.local.xcconfig"
