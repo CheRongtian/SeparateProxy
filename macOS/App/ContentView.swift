@@ -10,11 +10,13 @@ struct ContentView: View {
             keySection
             applicationSection
             Divider()
+            chromeDNSSection
+            Divider()
             statusSection
             controls
         }
         .padding(24)
-        .frame(width: 520)
+        .frame(width: 560)
     }
 
     private var header: some View {
@@ -105,6 +107,64 @@ struct ContentView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .help("Refresh Status")
+        }
+    }
+
+    private var chromeDNSSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Chrome DNS Integration")
+                    .font(.headline)
+                Spacer()
+                Text(viewModel.chromeDNSStateLabel)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(chromeDNSStatusColor)
+            }
+
+            Text(viewModel.chromeDNSMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Chrome prefers Cloudflare DoH. If DoH is unavailable in automatic mode, Chrome may fall back to the macOS system resolver.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                switch viewModel.chromeDNSState {
+                case .notConfigured, .chromeRunning, .readyToConfigure:
+                    Button(viewModel.chromeDNSConfigureButtonTitle) {
+                        viewModel.configureChromeDNS()
+                    }
+                    .buttonStyle(.borderedProminent)
+                case .configuring:
+                    ProgressView()
+                    Text("Updating Chrome DNS integration...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .configured:
+                    if viewModel.chromeDNSCanRemove {
+                        Button(viewModel.chromeDNSRemoveButtonTitle, role: .destructive) {
+                            viewModel.removeChromeDNSIntegration()
+                        }
+                    }
+                case .modifiedExternally, .unsupported, .error:
+                    EmptyView()
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private var chromeDNSStatusColor: Color {
+        switch viewModel.chromeDNSState {
+        case .configured:
+            return .green
+        case .modifiedExternally, .unsupported, .error:
+            return .orange
+        default:
+            return .secondary
         }
     }
 

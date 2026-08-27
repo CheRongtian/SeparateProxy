@@ -15,6 +15,7 @@ The macOS app provides:
 
 - a SwiftUI interface;
 - Google Chrome discovery through Launch Services;
+- one-time Chrome DNS integration with Cloudflare DNS-over-HTTPS;
 - Outline access-key storage in the macOS Keychain;
 - Start Proxy and Stop Proxy controls;
 - a privileged helper registered with `SMAppService`;
@@ -84,7 +85,7 @@ Chrome helper processes are covered by the app-bundle path. The configuration do
 - Google Chrome installed in `/Applications`;
 - a valid static Outline `ss://` access key;
 - administrator approval for the privileged helper;
-- Chrome Secure DNS configured as described below.
+- Chrome initialized at least once so its Local State file exists.
 
 ## Local build configuration
 
@@ -151,17 +152,36 @@ Select **Start Proxy** to start sing-box and **Stop Proxy** to stop only the pro
 
 When replacing a development build that changes the embedded helper, disable the existing SeparateProxy background item before replacing the app. macOS may require the updated helper to be approved again.
 
-## Chrome Secure DNS
+## Chrome DNS integration
 
-The app does not change macOS DNS settings. Chrome should use Custom Secure DNS so its DNS-over-HTTPS connections follow the existing Chrome process rule through Outline.
+SeparateProxy does not change macOS DNS settings and does not couple Chrome DNS configuration to Start Proxy or Stop Proxy. The app provides a one-time Chrome DNS integration action that configures these browser-wide Local State preferences:
 
-For Chrome 151, the tested custom provider value is:
+```text
+dns_over_https.mode = automatic
+dns_over_https.automatic_mode_fallback_to_doh = false
+```
+
+The tested Cloudflare provider value is preserved as:
 
 ```json
 {"servers":[{"template":"https://one.one.one.one/dns-query{?dns}","endpoints":[{"ips":["1.1.1.1","1.0.0.1"]}]}]}
 ```
 
 The IPv4 endpoint addresses bootstrap the HTTPS connection without resolving the provider hostname through the local resolver. This does not limit the DNS record types returned by the provider.
+
+Chrome prefers Cloudflare DoH. If DoH is unavailable in automatic mode, Chrome may fall back to the macOS system resolver. SeparateProxy does not claim that automatic mode prevents every plaintext DNS fallback.
+
+Chrome must be completely closed while its Local State file is updated. If Chrome is running, the app displays **Quit and Configure Chrome**, requests a graceful termination after the user selects it, verifies that Chrome has exited, applies the integration, and reopens Chrome. Future proxy Start and Stop operations do not modify Chrome DNS settings.
+
+SeparateProxy stores only the original existence and value of these three preferences in the user's application-support directory:
+
+```text
+dns_over_https.mode
+dns_over_https.templates
+dns_over_https.automatic_mode_fallback_to_doh
+```
+
+When removing the integration, SeparateProxy restores those values only if all three current preferences still exactly match the values installed by SeparateProxy. If Chrome, the user, or another application changed them, SeparateProxy leaves Chrome unchanged and reports the external modification.
 
 ## Runtime security
 
@@ -222,7 +242,13 @@ The test suite covers:
 - exact code-signing requirement generation;
 - app/helper bundle-identifier derivation;
 - JSON encoding;
-- `sing-box check` with a synthetic configuration.
+- `sing-box check` with a synthetic configuration;
+- Chrome DNS installation with absent or existing preferences;
+- conditional restoration and external-change protection;
+- malformed or unsupported Chrome Local State rejection;
+- atomic-write failure handling and permission preservation;
+- Chrome running and restart-before-write guards;
+- exact Cloudflare DoH template and bootstrap endpoints.
 
 Tests never start the TUN.
 
