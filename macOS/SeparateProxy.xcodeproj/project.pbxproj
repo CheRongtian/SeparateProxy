@@ -39,6 +39,7 @@
 		300000000000000000000051 /* SeparateProxyHelper in Embed Helper and sing-box */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* SeparateProxyHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		300000000000000000000052 /* ../bin/sing-box in Embed Helper and sing-box */ = {isa = PBXBuildFile; fileRef = 100000000000000000000041 /* ../bin/sing-box */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		300000000000000000000053 /* com.cherongtian.SeparateProxy.Helper.plist in Embed LaunchDaemon */ = {isa = PBXBuildFile; fileRef = 100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */; };
+		300000000000000000000054 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000043 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -125,6 +126,7 @@
 		100000000000000000000035 /* TrafficAccountingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrafficAccountingTests.swift; sourceTree = "<group>"; };
 		100000000000000000000041 /* ../bin/sing-box */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = "../bin/sing-box"; sourceTree = "<group>"; };
 		100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.cherongtian.SeparateProxy.Helper.plist; sourceTree = "<group>"; };
+		100000000000000000000043 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000000000000000000051 /* Project.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Project.xcconfig; sourceTree = "<group>"; };
 		100000000000000000000052 /* DeveloperSettings.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = DeveloperSettings.xcconfig.example; sourceTree = "<group>"; };
 		200000000000000000000001 /* SeparateProxy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SeparateProxy.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -236,6 +238,7 @@
 		000000000000000000000007 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				100000000000000000000043 /* Assets.xcassets */,
 				100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */,
 			);
 			path = Resources;
@@ -388,6 +391,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				300000000000000000000054 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -508,6 +512,7 @@
 		600000000000000000000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/SeparateProxy.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = "$(SP_DEVELOPMENT_TEAM)";
@@ -529,6 +534,7 @@
 		600000000000000000000012 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/SeparateProxy.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = "$(SP_DEVELOPMENT_TEAM)";
