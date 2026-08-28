@@ -14,6 +14,7 @@ struct DiscoveredApplication: Identifiable, Equatable {
 
 enum ApplicationDiscovery {
     static let chromeBundleIdentifier = "com.google.Chrome"
+    static let visualStudioCodeBundleIdentifier = "com.microsoft.VSCode"
 
     @MainActor
     static func findGoogleChrome() -> DiscoveredApplication? {
@@ -36,6 +37,46 @@ enum ApplicationDiscovery {
             bundleURL: url.standardizedFileURL,
             icon: NSWorkspace.shared.icon(forFile: url.path)
         )
+    }
+
+    @MainActor
+    static func findVisualStudioCodeBundleURL() -> URL? {
+        let runningCandidates = NSRunningApplication.runningApplications(
+            withBundleIdentifier: visualStudioCodeBundleIdentifier
+        )
+        .compactMap(\.bundleURL)
+
+        for candidate in runningCandidates {
+            if let validated = validatedApplicationURL(
+                candidate,
+                bundleIdentifier: visualStudioCodeBundleIdentifier
+            ) {
+                return validated
+            }
+        }
+
+        guard let candidate = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: visualStudioCodeBundleIdentifier
+        ) else {
+            return nil
+        }
+        return validatedApplicationURL(
+            candidate,
+            bundleIdentifier: visualStudioCodeBundleIdentifier
+        )
+    }
+
+    private static func validatedApplicationURL(
+        _ url: URL,
+        bundleIdentifier: String
+    ) -> URL? {
+        guard url.isFileURL,
+              url.pathExtension == "app",
+              let bundle = Bundle(url: url),
+              bundle.bundleIdentifier == bundleIdentifier else {
+            return nil
+        }
+        return url.standardizedFileURL
     }
 }
 

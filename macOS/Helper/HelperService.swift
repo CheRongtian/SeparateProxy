@@ -32,6 +32,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         accessKey: String,
         chromeBundlePath: String,
         codexEnabled: Bool,
+        vsCodeBundlePath: String,
         withReply reply: @escaping (NSDictionary) -> Void
     ) {
         queue.async {
@@ -46,13 +47,21 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         .forConsoleUser()
                         .discoverActiveInstallation()
                 }
+                let vsCodePluginHelper = try VSCodePluginHelperValidator.resolveIfEnabled(
+                    codexEnabled
+                ) {
+                    try VSCodePluginHelperValidator().validateBundle(
+                        atPath: vsCodeBundlePath
+                    )
+                }
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
                 let configuration: SingBoxConfiguration
                 if codexEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
                         chromeBundlePath: validatedChromePath,
-                        codexExecutablePath: codexInstallation?.executablePath
+                        codexExecutablePath: codexInstallation?.executablePath,
+                        vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath
                     )
                 } else {
                     guard let validatedChromePath else {

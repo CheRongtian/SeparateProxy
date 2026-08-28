@@ -128,7 +128,7 @@ struct ContentView: View {
                                 .font(.caption.bold())
                                 .foregroundStyle(codexStatusColor)
                         }
-                        Text(viewModel.codexTargetState.detail)
+                        Text(viewModel.codexTargetDetail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

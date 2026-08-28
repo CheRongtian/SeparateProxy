@@ -300,6 +300,141 @@ public struct CodexExtensionDiscovery {
     }
 }
 
+public struct VSCodePluginHelperInstallation: Equatable, Sendable {
+    public let bundleRootPath: String
+    public let executablePath: String
+
+    public init(bundleRootPath: String, executablePath: String) {
+        self.bundleRootPath = bundleRootPath
+        self.executablePath = executablePath
+    }
+}
+
+public enum VSCodePluginHelperValidationError: LocalizedError, Equatable {
+    case invalidBundle(String)
+    case incompleteBundle(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidBundle(reason):
+            return "The Visual Studio Code application is unsupported: \(reason)"
+        case let .incompleteBundle(reason):
+            return "The Visual Studio Code application is incomplete: \(reason)"
+        }
+    }
+}
+
+public struct VSCodePluginHelperValidator {
+    public static let bundleIdentifier = "com.microsoft.VSCode"
+    public static let pluginHelperBundleIdentifier = "com.microsoft.VSCode.helper"
+    public static let pluginHelperRelativePath = "Contents/Frameworks/Code Helper (Plugin).app"
+    public static let pluginHelperExecutableRelativePath = "Contents/MacOS/Code Helper (Plugin)"
+
+    private let fileManager: FileManager
+
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    public static func resolveIfEnabled(
+        _ enabled: Bool,
+        validation: () throws -> VSCodePluginHelperInstallation
+    ) rethrows -> VSCodePluginHelperInstallation? {
+        guard enabled else { return nil }
+        return try validation()
+    }
+
+    public func validateBundle(atPath path: String) throws -> VSCodePluginHelperInstallation {
+        guard path.hasPrefix("/"),
+              path.hasSuffix(".app"),
+              !path.contains("\n"),
+              !path.contains("\0") else {
+            throw VSCodePluginHelperValidationError.invalidBundle("the bundle path is invalid")
+        }
+
+        let candidate = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        try requireDirectory(
+            candidate,
+            error: .invalidBundle("the bundle root is not a regular directory")
+        )
+        let canonicalBundle = candidate.resolvingSymlinksInPath().standardizedFileURL
+        guard canonicalBundle.pathExtension == "app",
+              let bundle = Bundle(url: canonicalBundle),
+              bundle.bundleIdentifier == Self.bundleIdentifier else {
+            throw VSCodePluginHelperValidationError.invalidBundle(
+                "the bundle identifier is not \(Self.bundleIdentifier)"
+            )
+        }
+
+        let pluginBundle = canonicalBundle
+            .appendingPathComponent(Self.pluginHelperRelativePath, isDirectory: true)
+        try requireDirectory(
+            pluginBundle,
+            error: .incompleteBundle("Code Helper (Plugin).app is missing or invalid")
+        )
+        guard let nestedBundle = Bundle(url: pluginBundle),
+              nestedBundle.bundleIdentifier == Self.pluginHelperBundleIdentifier else {
+            throw VSCodePluginHelperValidationError.invalidBundle(
+                "the nested helper bundle identifier is not \(Self.pluginHelperBundleIdentifier)"
+            )
+        }
+
+        let executable = pluginBundle
+            .appendingPathComponent(Self.pluginHelperExecutableRelativePath)
+        guard executable.lastPathComponent == "Code Helper (Plugin)" else {
+            throw VSCodePluginHelperValidationError.invalidBundle(
+                "the nested helper executable name is invalid"
+            )
+        }
+        var executableInformation = stat()
+        guard lstat(executable.path, &executableInformation) == 0 else {
+            throw VSCodePluginHelperValidationError.incompleteBundle(
+                "Code Helper (Plugin) is missing"
+            )
+        }
+        guard executableInformation.st_mode & S_IFMT == S_IFREG else {
+            throw VSCodePluginHelperValidationError.invalidBundle(
+                "Code Helper (Plugin) is not a regular non-symlink file"
+            )
+        }
+        guard executableInformation.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH) != 0,
+              fileManager.isExecutableFile(atPath: executable.path) else {
+            throw VSCodePluginHelperValidationError.incompleteBundle(
+                "Code Helper (Plugin) is not executable"
+            )
+        }
+
+        let canonicalExecutable = executable.resolvingSymlinksInPath().standardizedFileURL
+        guard isStrictDescendant(canonicalExecutable, of: canonicalBundle) else {
+            throw VSCodePluginHelperValidationError.invalidBundle(
+                "Code Helper (Plugin) resolves outside the validated application bundle"
+            )
+        }
+        return VSCodePluginHelperInstallation(
+            bundleRootPath: canonicalBundle.path,
+            executablePath: canonicalExecutable.path
+        )
+    }
+
+    private func requireDirectory(
+        _ url: URL,
+        error: VSCodePluginHelperValidationError
+    ) throws {
+        var information = stat()
+        guard lstat(url.path, &information) == 0,
+              information.st_mode & S_IFMT == S_IFDIR else {
+            throw error
+        }
+    }
+
+    private func isStrictDescendant(_ candidate: URL, of parent: URL) -> Bool {
+        let candidateComponents = candidate.standardizedFileURL.pathComponents
+        let parentComponents = parent.standardizedFileURL.pathComponents
+        return candidateComponents.count > parentComponents.count
+            && Array(candidateComponents.prefix(parentComponents.count)) == parentComponents
+    }
+}
+
 private struct ExtensionIndexRecord: Decodable {
     struct Identifier: Decodable {
         let id: String

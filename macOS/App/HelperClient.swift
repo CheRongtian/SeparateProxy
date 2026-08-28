@@ -31,13 +31,15 @@ final class HelperClient {
         accessKey: String,
         chromeBundlePath: String,
         codexEnabled: Bool,
+        vsCodeBundlePath: String,
         completion: @escaping (Result<NSDictionary, Error>) -> Void
     ) {
         withProxy(completion: completion) { proxy in
             proxy.startProxy(
                 accessKey: accessKey,
                 chromeBundlePath: chromeBundlePath,
-                codexEnabled: codexEnabled
+                codexEnabled: codexEnabled,
+                vsCodeBundlePath: vsCodeBundlePath
             ) { completion(.success($0)) }
         }
     }

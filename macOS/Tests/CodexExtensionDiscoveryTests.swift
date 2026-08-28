@@ -120,6 +120,95 @@ final class CodexExtensionDiscoveryTests: XCTestCase {
         }())
         XCTAssertFalse(downstreamPreparationRan)
     }
+
+    func testValidatesVSCodePluginHelperAtNonstandardPath() throws {
+        let fixture = try VSCodeBundleFixture()
+        defer { fixture.remove() }
+
+        let installation = try VSCodePluginHelperValidator().validateBundle(
+            atPath: fixture.bundle.path
+        )
+
+        XCTAssertEqual(installation.bundleRootPath, fixture.bundle.path)
+        XCTAssertEqual(installation.executablePath, fixture.executable.path)
+        XCTAssertTrue(installation.executablePath.contains("Visual Studio Code.app"))
+    }
+
+    func testRejectsWrongVSCodeBundleIdentifier() throws {
+        let fixture = try VSCodeBundleFixture(
+            bundleIdentifier: "com.example.Unrelated"
+        )
+        defer { fixture.remove() }
+
+        XCTAssertThrowsError(try VSCodePluginHelperValidator().validateBundle(
+            atPath: fixture.bundle.path
+        )) { error in
+            guard case .invalidBundle = error as? VSCodePluginHelperValidationError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRejectsWrongNestedVSCodeHelperBundleIdentifier() throws {
+        let fixture = try VSCodeBundleFixture(
+            nestedBundleIdentifier: "com.example.Unrelated.Helper"
+        )
+        defer { fixture.remove() }
+
+        XCTAssertThrowsError(try VSCodePluginHelperValidator().validateBundle(
+            atPath: fixture.bundle.path
+        )) { error in
+            guard case .invalidBundle = error as? VSCodePluginHelperValidationError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRejectsMissingVSCodePluginHelperExecutable() throws {
+        let fixture = try VSCodeBundleFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.executable)
+
+        XCTAssertThrowsError(try VSCodePluginHelperValidator().validateBundle(
+            atPath: fixture.bundle.path
+        )) { error in
+            guard case .incompleteBundle = error as? VSCodePluginHelperValidationError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRejectsSymlinkedVSCodePluginHelperExecutable() throws {
+        let fixture = try VSCodeBundleFixture()
+        defer { fixture.remove() }
+        let target = fixture.root.appendingPathComponent("synthetic-helper")
+        try Data("synthetic executable".utf8).write(to: target)
+        try FileManager.default.removeItem(at: fixture.executable)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.executable,
+            withDestinationURL: target
+        )
+
+        XCTAssertThrowsError(try VSCodePluginHelperValidator().validateBundle(
+            atPath: fixture.bundle.path
+        )) { error in
+            guard case .invalidBundle = error as? VSCodePluginHelperValidationError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testCodexDisabledDoesNotValidateVSCodeBundle() throws {
+        var validationWasCalled = false
+
+        let installation = try VSCodePluginHelperValidator.resolveIfEnabled(false) {
+            validationWasCalled = true
+            throw VSCodePluginHelperValidationError.invalidBundle("synthetic failure")
+        }
+
+        XCTAssertNil(installation)
+        XCTAssertFalse(validationWasCalled)
+    }
 }
 
 private final class CodexExtensionFixture {
@@ -221,6 +310,69 @@ private final class CodexExtensionFixture {
 
     private func writeJSONObject(_ object: Any, to url: URL) throws {
         let data = try JSONSerialization.data(withJSONObject: object)
+        try data.write(to: url, options: .atomic)
+    }
+}
+
+private final class VSCodeBundleFixture {
+    let root: URL
+    let bundle: URL
+    let nestedBundle: URL
+    let executable: URL
+
+    init(
+        bundleIdentifier: String = VSCodePluginHelperValidator.bundleIdentifier,
+        nestedBundleIdentifier: String = VSCodePluginHelperValidator.pluginHelperBundleIdentifier
+    ) throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SeparateProxy-VSCode-\(UUID().uuidString)", isDirectory: true)
+        bundle = root
+            .appendingPathComponent("Desktop", isDirectory: true)
+            .appendingPathComponent("Visual Studio Code.app", isDirectory: true)
+        nestedBundle = bundle.appendingPathComponent(
+            VSCodePluginHelperValidator.pluginHelperRelativePath,
+            isDirectory: true
+        )
+        executable = nestedBundle.appendingPathComponent(
+            VSCodePluginHelperValidator.pluginHelperExecutableRelativePath
+        )
+
+        try FileManager.default.createDirectory(
+            at: executable.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try writeInfoPlist(
+            bundleIdentifier: bundleIdentifier,
+            to: bundle.appendingPathComponent("Contents/Info.plist")
+        )
+        try writeInfoPlist(
+            bundleIdentifier: nestedBundleIdentifier,
+            to: nestedBundle.appendingPathComponent("Contents/Info.plist")
+        )
+        try Data("synthetic executable".utf8).write(to: executable)
+        guard chmod(executable.path, S_IRUSR | S_IWUSR | S_IXUSR) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func writeInfoPlist(bundleIdentifier: String, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "CFBundleIdentifier": bundleIdentifier,
+                "CFBundleName": "Synthetic Bundle",
+                "CFBundlePackageType": "APPL",
+            ],
+            format: .xml,
+            options: 0
+        )
         try data.write(to: url, options: .atomic)
     }
 }

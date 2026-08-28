@@ -5,13 +5,14 @@ SeparateProxy routes selected Google Chrome and OpenAI Codex traffic through an 
 ```text
 Google Chrome                     -> Outline
 OpenAI Codex extension executable -> Outline
+VS Code Extension Host            -> Outline only for chatgpt.com TLS/443
 Every unmatched process           -> direct
 ```
 
 The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and two independently selectable targets:
 
 - Google Chrome;
-- the native `codex` executable installed by the OpenAI VS Code extension.
+- the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route.
 
 It has not been validated with unrelated Shadowsocks services. It does not proxy Visual Studio Code as a whole.
 
@@ -75,6 +76,8 @@ macOS TUN, stack: system
   |-- remaining Chrome traffic -> Outline
   |-- Codex TCP/443 -> sniff TLS SNI and recover hostname destination
   |-- remaining Codex traffic -> Outline
+  |-- VS Code shared Extension Host TCP/443 -> inspect TLS SNI
+  |-- that host + exact chatgpt.com -> restore hostname and use Outline
   `-- every unmatched process -> direct
 ```
 
@@ -149,11 +152,34 @@ With Codex selected and Chrome unselected, the generated rules are equivalent to
     ],
     "action": "route",
     "outbound": "outline"
+  },
+  {
+    "process_path_regex": [
+      "^/Users/example/Visual Studio Code\\.app/Contents/Frameworks/Code Helper \\(Plugin\\)\\.app/Contents/MacOS/Code Helper \\(Plugin\\)$"
+    ],
+    "network": "tcp",
+    "port": 443,
+    "action": "sniff",
+    "sniffer": ["tls"]
+  },
+  {
+    "process_path_regex": [
+      "^/Users/example/Visual Studio Code\\.app/Contents/Frameworks/Code Helper \\(Plugin\\)\\.app/Contents/MacOS/Code Helper \\(Plugin\\)$"
+    ],
+    "network": "tcp",
+    "port": 443,
+    "protocol": "tls",
+    "domain": ["chatgpt.com"],
+    "action": "route",
+    "outbound": "outline",
+    "override_address": "chatgpt.com"
   }
 ]
 ```
 
 In sing-box 1.13.19, `port` is the destination-port rule field. The sniff rule is limited to the exact validated Codex executable, TCP, and destination port 443. The route rule sends all remaining traffic from that executable through Outline without IPv6, UDP, or DNS restrictions.
+
+The two additional rules support the Codex Work locally usage and remaining-allowance request. The first inspects TLS ClientHello from the exact shared `Code Helper (Plugin)` executable without rewriting or routing it. The second matches only TLS SNI/domain `chatgpt.com` on TCP/443, replaces the destination with `chatgpt.com:443`, and routes it through Outline. This lets the Outline server resolve the domain without adding a sing-box DNS configuration.
 
 ### Chrome and Codex together
 
@@ -162,21 +188,29 @@ In sing-box 1.13.19, `port` is the destination-port rule field. The sniff rule i
 2. Chrome -> Outline
 3. exact Codex executable + TCP/443 -> TLS SNI destination recovery
 4. exact Codex executable -> Outline
-5. final -> direct
+5. exact VS Code Plugin Helper + TCP/443 -> inspect TLS SNI only
+6. same shared host + exact chatgpt.com TLS/443 -> restore hostname and use Outline
+7. final -> direct
 ```
 
 Codex rules are appended without changing the validated Chrome rules.
 
 ## Codex target boundary and discovery
 
-The Codex target covers only:
+The Codex target consists of two narrow paths:
 
 ```text
 active openai.chatgpt extension
-`-- bin/macos-aarch64/codex
+|-- bin/macos-aarch64/codex -> Outline
+`-- VS Code shared Extension Host
+    `-- exact chatgpt.com TLS/443 -> Outline
 ```
 
-It deliberately excludes Visual Studio Code itself, Code Helper, `codex-code-mode-host`, `rg`, shells, Git, Homebrew, integrated-terminal commands, arbitrary children, and other extension-native executables.
+The second path does not cover the whole VS Code application or all Extension Host destinations. The GUI discovers `com.microsoft.VSCode` at its actual Launch Services location. The helper validates that bundle, derives the fixed `Code Helper (Plugin)` relative path, validates nested bundle identifier `com.microsoft.VSCode.helper`, and generates an exact executable regex.
+
+`Code Helper (Plugin)` is a shared Extension Host. Another extension in that same process that contacts exact `chatgpt.com` over TLS/443 will share this route. Other Extension Host destinations remain direct and are not rewritten; their TLS/443 ClientHello may still be inspected for SNI matching.
+
+The target excludes the VS Code main executable, Renderer, generic helpers, `codex-code-mode-host`, `rg`, shells, Git, Homebrew, integrated-terminal commands, arbitrary children, and other extension-native executables.
 
 The helper performs authoritative discovery during every Start:
 
@@ -192,7 +226,7 @@ The helper performs authoritative discovery during every Start:
 
 Package metadata provides a controlled discovery boundary; it is not cryptographic authentication. The installed Codex binary did not provide a stable signature suitable for a mandatory Team ID check during implementation.
 
-The GUI performs discovery for display. The helper repeats it independently and does not trust an executable path from the GUI. XPC carries only `codexEnabled: Bool` for this target.
+The GUI performs native extension discovery for display, and the helper repeats it independently. For Work locally support, the GUI sends only the discovered VS Code `.app` candidate path. The helper canonicalizes that bundle, verifies `com.microsoft.VSCode`, derives the fixed Plugin Helper location, verifies nested bundle identifier `com.microsoft.VSCode.helper`, and requires an executable regular file. XPC never carries a nested executable path, regex, or route JSON.
 
 ### Codex extension updates
 
@@ -606,6 +640,24 @@ exact Codex TCP/443 -> TLS SNI -> hostname:443 -> Outline DOMAIN destination -> 
 
 No domain list is hardcoded. Runtime hostname destinations have included `chatgpt.com`, `ab.chatgpt.com`, and `developers.openai.com`. ECH/no-SNI/non-TLS/timeout flows retain the original destination and may still fail if it is wrong.
 
+### Codex works but Work locally usage is missing
+
+The native Codex process can work while the Work locally usage or remaining-allowance metadata is absent. A global proxy can make that UI reappear.
+
+The confirmed request boundary is:
+
+```text
+GET https://chatgpt.com/backend-api/wham/usage
+→ VS Code shared Code Helper (Plugin)
+→ direct under the old native-Codex-only rules
+```
+
+The request is issued by the shared Extension Host, so the exact native `codex` process rule cannot cover it. SeparateProxy now performs a non-rewriting TLS sniff for that Helper's TCP/443 flows, then routes only exact `chatgpt.com` through Outline with `override_address: chatgpt.com`.
+
+The exact failed flow's resolved raw IP was not captured. The confirmed finding is the direct process boundary. This environment has separately demonstrated incorrect system DNS answers for `chatgpt.com`; restoring the hostname before the Outline route avoids relying on that local answer.
+
+Whole-VS-Code and whole-Extension-Host routes remain rejected because they would capture unrelated traffic.
+
 ### Investigated regression: early Codex integration also broke Chrome
 
 An earlier iteration coincided with Chrome failure while static Chrome rules remained present. It also changed shared Helper/XPC lifecycle structure. Selector, per-connection controller/queue, and helper-registration theories were investigated, but retained evidence does not prove a single cause.
@@ -682,7 +734,7 @@ The literal word `sniff` is unnecessary. A hostname in the Codex Outline outboun
 - Process lookup: startup sleep, retry loops, or removing the local-source guard.
 - Chrome DNS: global DNS hijack, proxy all `mDNSResponder`, Start/Stop DNS changes, or strict DoH that harms direct use.
 - Chrome IPv6: global rejection or copying the workaround to other targets.
-- Codex: global DNS changes, `mDNSResponder` routing, all-DNS hijack, `/etc/hosts`, fixed IP/domain mappings, global OpenAI interception, whole-VS-Code routing, unsupported `codex-code-mode-host`, hardcoded versions, or wildcards over historical versions.
+- Codex: global DNS changes, `mDNSResponder` routing, all-DNS hijack, `/etc/hosts`, fixed IP mappings, broad OpenAI-domain interception, whole-VS-Code or whole-Extension-Host routing, unsupported `codex-code-mode-host`, hardcoded versions, or wildcards over historical versions.
 
 These options either preserve timing bugs, expand effects to unrelated applications, or rely on brittle static state.
 
@@ -703,6 +755,7 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - The bundled binary and Codex target require Apple silicon.
 - Chrome automatic Secure DNS may use the system resolver.
 - Codex recovery cannot handle ECH-hidden, no-SNI, non-TLS, or sniff-timeout destinations.
+- Shared Extension Host TLS/443 ClientHello is inspected for SNI; only exact `chatgpt.com` is rewritten and routed. Another extension using that same host and domain shares the route.
 - Codex updates require VS Code restart and SeparateProxy Stop/Start.
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.

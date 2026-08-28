@@ -42,6 +42,9 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
             public let action: String
             public let sniffer: [String]?
             public let overrideDestination: Bool?
+            public let protocolName: String?
+            public let domains: [String]?
+            public let overrideAddress: String?
             public let method: String?
             public let noDrop: Bool?
             public let outbound: String?
@@ -52,6 +55,9 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
                 case ipVersion = "ip_version"
                 case destinationPort = "port"
                 case overrideDestination = "override_destination"
+                case protocolName = "protocol"
+                case domains = "domain"
+                case overrideAddress = "override_address"
                 case noDrop = "no_drop"
             }
 
@@ -63,6 +69,9 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
                 action: String,
                 sniffer: [String]? = nil,
                 overrideDestination: Bool? = nil,
+                protocolName: String? = nil,
+                domains: [String]? = nil,
+                overrideAddress: String? = nil,
                 method: String? = nil,
                 noDrop: Bool? = nil,
                 outbound: String? = nil
@@ -74,6 +83,9 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
                 self.action = action
                 self.sniffer = sniffer
                 self.overrideDestination = overrideDestination
+                self.protocolName = protocolName
+                self.domains = domains
+                self.overrideAddress = overrideAddress
                 self.method = method
                 self.noDrop = noDrop
                 self.outbound = outbound
@@ -105,6 +117,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
 public enum SingBoxConfigurationError: LocalizedError, Equatable {
     case invalidChromeBundlePath
     case invalidCodexExecutablePath
+    case invalidVSCodePluginHelperExecutablePath
     case noTargetsSelected
 
     public var errorDescription: String? {
@@ -113,6 +126,8 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
             return "The Google Chrome application path is invalid."
         case .invalidCodexExecutablePath:
             return "The Codex executable path is invalid."
+        case .invalidVSCodePluginHelperExecutablePath:
+            return "The Visual Studio Code Plugin Helper executable path is invalid."
         case .noTargetsSelected:
             return "Select at least one proxy target."
         }
@@ -194,10 +209,14 @@ public enum SingBoxConfigurationBuilder {
     public static func make(
         outline: OutlineAccessKey,
         chromeBundlePath: String?,
-        codexExecutablePath: String?
+        codexExecutablePath: String?,
+        vsCodePluginHelperExecutablePath: String?
     ) throws -> SingBoxConfiguration {
         guard chromeBundlePath != nil || codexExecutablePath != nil else {
             throw SingBoxConfigurationError.noTargetsSelected
+        }
+        guard (codexExecutablePath == nil) == (vsCodePluginHelperExecutablePath == nil) else {
+            throw SingBoxConfigurationError.invalidVSCodePluginHelperExecutablePath
         }
 
         if let chromeBundlePath {
@@ -208,7 +227,10 @@ public enum SingBoxConfigurationBuilder {
             guard let codexExecutablePath else {
                 return chromeConfiguration
             }
-            let codexRules = try makeCodexRules(executablePath: codexExecutablePath)
+            let codexRules = try makeCodexRules(
+                executablePath: codexExecutablePath,
+                vsCodePluginHelperExecutablePath: vsCodePluginHelperExecutablePath!
+            )
             return SingBoxConfiguration(
                 log: chromeConfiguration.log,
                 inbounds: chromeConfiguration.inbounds,
@@ -221,7 +243,10 @@ public enum SingBoxConfigurationBuilder {
             )
         }
 
-        let codexRules = try makeCodexRules(executablePath: codexExecutablePath!)
+        let codexRules = try makeCodexRules(
+            executablePath: codexExecutablePath!,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperExecutablePath!
+        )
         return SingBoxConfiguration(
             log: .init(level: "info", timestamp: true),
             inbounds: [
@@ -260,7 +285,8 @@ public enum SingBoxConfigurationBuilder {
     }
 
     private static func makeCodexRules(
-        executablePath: String
+        executablePath: String,
+        vsCodePluginHelperExecutablePath: String
     ) throws -> [SingBoxConfiguration.Route.Rule] {
         guard executablePath.hasPrefix("/"),
               URL(fileURLWithPath: executablePath).lastPathComponent == "codex",
@@ -274,6 +300,19 @@ public enum SingBoxConfigurationBuilder {
         let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
             .replacingOccurrences(of: #"\/"#, with: "/")
         let processPathRegex = ["^\(escapedPath)$"]
+        guard vsCodePluginHelperExecutablePath.hasPrefix("/"),
+              URL(fileURLWithPath: vsCodePluginHelperExecutablePath).lastPathComponent == "Code Helper (Plugin)",
+              !vsCodePluginHelperExecutablePath.contains("\n"),
+              !vsCodePluginHelperExecutablePath.contains("\0") else {
+            throw SingBoxConfigurationError.invalidVSCodePluginHelperExecutablePath
+        }
+        let normalizedVSCodeHelperPath = URL(
+            fileURLWithPath: vsCodePluginHelperExecutablePath
+        ).standardizedFileURL.path
+        let escapedVSCodeHelperPath = NSRegularExpression.escapedPattern(
+            for: normalizedVSCodeHelperPath
+        ).replacingOccurrences(of: #"\/"#, with: "/")
+        let vsCodeHelperProcessPathRegex = ["^\(escapedVSCodeHelperPath)$"]
         return [
             .init(
                 processPathRegex: processPathRegex,
@@ -286,6 +325,23 @@ public enum SingBoxConfigurationBuilder {
             .init(
                 processPathRegex: processPathRegex,
                 action: "route",
+                outbound: "outline"
+            ),
+            .init(
+                processPathRegex: vsCodeHelperProcessPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"]
+            ),
+            .init(
+                processPathRegex: vsCodeHelperProcessPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "route",
+                protocolName: "tls",
+                domains: ["chatgpt.com"],
+                overrideAddress: "chatgpt.com",
                 outbound: "outline"
             ),
         ]

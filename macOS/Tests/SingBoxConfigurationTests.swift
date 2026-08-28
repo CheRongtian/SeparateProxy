@@ -9,6 +9,8 @@ final class SingBoxConfigurationTests: XCTestCase {
         method: "aes-256-gcm",
         password: "test-only-password"
     )
+    private let codexPath = "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
+    private let vsCodePluginHelperPath = "/Users/test/Desktop/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)"
 
     func testBuildsValidatedChromeOnlyRules() throws {
         let configuration = try SingBoxConfigurationBuilder.make(
@@ -61,7 +63,8 @@ final class SingBoxConfigurationTests: XCTestCase {
         let codexDisabled = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: "/Applications/Google Chrome.app",
-            codexExecutablePath: nil
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil
         )
 
         XCTAssertEqual(codexDisabled, baseline)
@@ -69,7 +72,6 @@ final class SingBoxConfigurationTests: XCTestCase {
     }
 
     func testCodexEnabledOnlyAppendsSniffAndExactRouteAfterChromeRules() throws {
-        let codexPath = "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
         let baseline = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: "/Applications/Google Chrome.app"
@@ -77,11 +79,12 @@ final class SingBoxConfigurationTests: XCTestCase {
         let combined = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: "/Applications/Google Chrome.app",
-            codexExecutablePath: codexPath
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
         )
 
         XCTAssertEqual(Array(combined.route.rules.prefix(2)), baseline.route.rules)
-        XCTAssertEqual(combined.route.rules.count, 4)
+        XCTAssertEqual(combined.route.rules.count, 6)
         assertCodexSniffRule(combined.route.rules[2], codexPath: codexPath)
         XCTAssertEqual(combined.route.rules[3].action, "route")
         XCTAssertEqual(combined.route.rules[3].outbound, "outline")
@@ -94,6 +97,11 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertNil(combined.route.rules[3].method)
         XCTAssertNil(combined.route.rules[3].noDrop)
         XCTAssertNil(combined.route.rules[2].ipVersion)
+        assertVSCodePluginHelperRules(
+            sniffRule: combined.route.rules[4],
+            routeRule: combined.route.rules[5],
+            helperPath: vsCodePluginHelperPath
+        )
         XCTAssertEqual(combined.route.final, "direct")
     }
 
@@ -101,17 +109,23 @@ final class SingBoxConfigurationTests: XCTestCase {
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: nil,
-            codexExecutablePath: "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
         )
 
-        XCTAssertEqual(configuration.route.rules.count, 2)
+        XCTAssertEqual(configuration.route.rules.count, 4)
         assertCodexSniffRule(
             configuration.route.rules[0],
-            codexPath: "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
+            codexPath: codexPath
         )
         XCTAssertEqual(configuration.route.rules[1].action, "route")
         XCTAssertEqual(configuration.route.rules[1].outbound, "outline")
         XCTAssertNil(configuration.route.rules[1].overrideDestination)
+        assertVSCodePluginHelperRules(
+            sniffRule: configuration.route.rules[2],
+            routeRule: configuration.route.rules[3],
+            helperPath: vsCodePluginHelperPath
+        )
         XCTAssertEqual(configuration.route.final, "direct")
     }
 
@@ -120,7 +134,8 @@ final class SingBoxConfigurationTests: XCTestCase {
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: nil,
-            codexExecutablePath: codexPath
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
         )
         let pattern = try XCTUnwrap(
             configuration.route.rules.first?.processPathRegex.first
@@ -161,7 +176,8 @@ final class SingBoxConfigurationTests: XCTestCase {
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: nil,
-            codexExecutablePath: "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
         )
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: configuration.encodedJSON()) as? [String: Any]
@@ -169,7 +185,7 @@ final class SingBoxConfigurationTests: XCTestCase {
         let route = try XCTUnwrap(object["route"] as? [String: Any])
         let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
 
-        XCTAssertEqual(rules.count, 2)
+        XCTAssertEqual(rules.count, 4)
         XCTAssertEqual(rules[0]["network"] as? String, "tcp")
         XCTAssertEqual(rules[0]["port"] as? Int, 443)
         XCTAssertEqual(rules[0]["action"] as? String, "sniff")
@@ -185,6 +201,22 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertNil(rules[1]["sniffer"])
         XCTAssertNil(rules[1]["ip_version"])
         XCTAssertNil(rules[1]["dns"])
+
+        XCTAssertEqual(rules[2]["network"] as? String, "tcp")
+        XCTAssertEqual(rules[2]["port"] as? Int, 443)
+        XCTAssertEqual(rules[2]["action"] as? String, "sniff")
+        XCTAssertEqual(rules[2]["sniffer"] as? [String], ["tls"])
+        XCTAssertNil(rules[2]["override_destination"])
+        XCTAssertNil(rules[2]["override_address"])
+        XCTAssertNil(rules[2]["outbound"])
+
+        XCTAssertEqual(rules[3]["network"] as? String, "tcp")
+        XCTAssertEqual(rules[3]["port"] as? Int, 443)
+        XCTAssertEqual(rules[3]["protocol"] as? String, "tls")
+        XCTAssertEqual(rules[3]["domain"] as? [String], ["chatgpt.com"])
+        XCTAssertEqual(rules[3]["override_address"] as? String, "chatgpt.com")
+        XCTAssertEqual(rules[3]["action"] as? String, "route")
+        XCTAssertEqual(rules[3]["outbound"] as? String, "outline")
     }
 
     func testSyntheticConfigurationPassesBundledSingBoxCheck() throws {
@@ -224,7 +256,8 @@ final class SingBoxConfigurationTests: XCTestCase {
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: "/Applications/Google Chrome.app",
-            codexExecutablePath: "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
         )
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SeparateProxy-Codex-\(UUID().uuidString).json")
@@ -250,6 +283,71 @@ final class SingBoxConfigurationTests: XCTestCase {
             encoding: .utf8
         ) ?? ""
         XCTAssertEqual(process.terminationStatus, 0, message)
+    }
+
+    func testVSCodePluginHelperRegexMatchesOnlyExactPluginHelper() throws {
+        let specialHelperPath = "/Users/test/Dev Tools/(Stable)/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)"
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: specialHelperPath
+        )
+        let pattern = try XCTUnwrap(configuration.route.rules[2].processPathRegex.first)
+        let expression = try NSRegularExpression(pattern: pattern)
+
+        XCTAssertEqual(numberOfMatches(expression, in: specialHelperPath), 1)
+        XCTAssertEqual(
+            numberOfMatches(
+                expression,
+                in: "/Users/test/Dev Tools/(Stable)/Visual Studio Code.app/Contents/MacOS/Code"
+            ),
+            0
+        )
+        XCTAssertEqual(
+            numberOfMatches(
+                expression,
+                in: "/Users/test/Dev Tools/(Stable)/Visual Studio Code.app/Contents/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer)"
+            ),
+            0
+        )
+        XCTAssertEqual(
+            numberOfMatches(
+                expression,
+                in: "/Users/test/Dev Tools/(Stable)/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"
+            ),
+            0
+        )
+    }
+
+    func testSharedExtensionHostRouteUsesExactChatGPTDomainOnly() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
+        )
+        let routeRule = configuration.route.rules[3]
+
+        XCTAssertEqual(routeRule.domains, ["chatgpt.com"])
+        XCTAssertFalse(routeRule.domains?.contains("ab.chatgpt.com") ?? true)
+        XCTAssertFalse(routeRule.domains?.contains("example.org") ?? true)
+        XCTAssertEqual(routeRule.protocolName, "tls")
+        XCTAssertEqual(routeRule.overrideAddress, "chatgpt.com")
+    }
+
+    func testCodexConfigurationRequiresVSCodePluginHelperPath() {
+        XCTAssertThrowsError(try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: nil
+        )) { error in
+            XCTAssertEqual(
+                error as? SingBoxConfigurationError,
+                .invalidVSCodePluginHelperExecutablePath
+            )
+        }
     }
 
     func testCodeSigningRequirementRejectsInvalidComponents() {
@@ -315,8 +413,42 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(rule.action, "sniff", file: file, line: line)
         XCTAssertEqual(rule.sniffer, ["tls"], file: file, line: line)
         XCTAssertEqual(rule.overrideDestination, true, file: file, line: line)
+        XCTAssertNil(rule.protocolName, file: file, line: line)
+        XCTAssertNil(rule.domains, file: file, line: line)
+        XCTAssertNil(rule.overrideAddress, file: file, line: line)
         XCTAssertNil(rule.method, file: file, line: line)
         XCTAssertNil(rule.noDrop, file: file, line: line)
         XCTAssertNil(rule.outbound, file: file, line: line)
+    }
+
+    private func assertVSCodePluginHelperRules(
+        sniffRule: SingBoxConfiguration.Route.Rule,
+        routeRule: SingBoxConfiguration.Route.Rule,
+        helperPath: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let escapedPath = NSRegularExpression.escapedPattern(for: helperPath)
+            .replacingOccurrences(of: #"\/"#, with: "/")
+        let expectedRegex = ["^\(escapedPath)$"]
+
+        XCTAssertEqual(sniffRule.processPathRegex, expectedRegex, file: file, line: line)
+        XCTAssertEqual(sniffRule.network, "tcp", file: file, line: line)
+        XCTAssertEqual(sniffRule.destinationPort, 443, file: file, line: line)
+        XCTAssertEqual(sniffRule.action, "sniff", file: file, line: line)
+        XCTAssertEqual(sniffRule.sniffer, ["tls"], file: file, line: line)
+        XCTAssertNil(sniffRule.overrideDestination, file: file, line: line)
+        XCTAssertNil(sniffRule.overrideAddress, file: file, line: line)
+        XCTAssertNil(sniffRule.outbound, file: file, line: line)
+
+        XCTAssertEqual(routeRule.processPathRegex, expectedRegex, file: file, line: line)
+        XCTAssertEqual(routeRule.network, "tcp", file: file, line: line)
+        XCTAssertEqual(routeRule.destinationPort, 443, file: file, line: line)
+        XCTAssertEqual(routeRule.protocolName, "tls", file: file, line: line)
+        XCTAssertEqual(routeRule.domains, ["chatgpt.com"], file: file, line: line)
+        XCTAssertEqual(routeRule.action, "route", file: file, line: line)
+        XCTAssertEqual(routeRule.outbound, "outline", file: file, line: line)
+        XCTAssertEqual(routeRule.overrideAddress, "chatgpt.com", file: file, line: line)
+        XCTAssertNil(routeRule.overrideDestination, file: file, line: line)
     }
 }

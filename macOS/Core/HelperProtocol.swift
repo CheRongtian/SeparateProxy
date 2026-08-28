@@ -41,6 +41,7 @@ public enum HelperReplyKey {
         accessKey: String,
         chromeBundlePath: String,
         codexEnabled: Bool,
+        vsCodeBundlePath: String,
         withReply reply: @escaping (NSDictionary) -> Void
     )
 

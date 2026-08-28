@@ -13,11 +13,17 @@ final class ProxyViewModel: ObservableObject {
     @Published var codexIsSelected: Bool {
         didSet {
             UserDefaults.standard.set(codexIsSelected, forKey: Self.codexSelectionKey)
+            if codexIsSelected {
+                vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()
+            } else {
+                vsCodeBundleURL = nil
+            }
         }
     }
     @Published private(set) var keyIsSaved = false
     @Published private(set) var chrome: DiscoveredApplication?
     @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
+    @Published private(set) var vsCodeBundleURL: URL?
     @Published private(set) var state: ProxyState = .helperNotInstalled
     @Published private(set) var message = "Helper setup is required."
     @Published private(set) var chromeDNSState: ChromeDNSIntegrationState = .notConfigured
@@ -47,7 +53,7 @@ final class ProxyViewModel: ObservableObject {
         let canRetry = state == .stopped || state == .error
         let hasSelection = chromeIsSelected || codexIsSelected
         let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
-            && (!codexIsSelected || codexTargetState.canSelect)
+            && (!codexIsSelected || (codexTargetState.canSelect && vsCodeBundleURL != nil))
         return canRetry
             && helperService.status == .enabled
             && keyIsSaved
@@ -97,6 +103,15 @@ final class ProxyViewModel: ObservableObject {
         case .error:
             return "Error"
         }
+    }
+
+    var codexTargetDetail: String {
+        if codexIsSelected,
+           codexTargetState.canSelect,
+           vsCodeBundleURL == nil {
+            return "Visual Studio Code was not found."
+        }
+        return codexTargetState.detail
     }
 
     var chromeDNSConfigureButtonTitle: String {
@@ -188,6 +203,14 @@ final class ProxyViewModel: ObservableObject {
             message = "The OpenAI Codex VS Code extension is unavailable."
             return
         }
+        if codexIsSelected {
+            vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()
+            guard vsCodeBundleURL != nil else {
+                state = .error
+                message = "Visual Studio Code is unavailable."
+                return
+            }
+        }
 
         var accessKey: String?
         do {
@@ -200,7 +223,8 @@ final class ProxyViewModel: ObservableObject {
             helperClient.start(
                 accessKey: accessKey,
                 chromeBundlePath: chromeIsSelected ? chrome?.bundleURL.path ?? "" : "",
-                codexEnabled: codexIsSelected
+                codexEnabled: codexIsSelected,
+                vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : ""
             ) { [weak self] result in
                 Task { @MainActor in
                     self?.applyHelperResult(result)
@@ -229,6 +253,11 @@ final class ProxyViewModel: ObservableObject {
         codexTargetState = CodexTargetDiscovery.discover()
         if !codexTargetState.canSelect {
             codexIsSelected = false
+        }
+        if codexIsSelected, codexTargetState.canSelect {
+            vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()
+        } else {
+            vsCodeBundleURL = nil
         }
         refreshChromeDNSState()
         refreshHelperState()
