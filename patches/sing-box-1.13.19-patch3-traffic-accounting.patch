@@ -1,0 +1,788 @@
+--- a/box.go
++++ b/box.go
+@@ -21,6 +21,7 @@
+ 	"github.com/sagernet/sing-box/dns"
+ 	"github.com/sagernet/sing-box/experimental"
+ 	"github.com/sagernet/sing-box/experimental/cachefile"
++	"github.com/sagernet/sing-box/experimental/trafficaccounting"
+ 	"github.com/sagernet/sing-box/log"
+ 	"github.com/sagernet/sing-box/option"
+ 	"github.com/sagernet/sing-box/protocol/direct"
+@@ -366,6 +367,14 @@
+ 			service.MustRegister[adapter.V2RayServer](ctx, v2rayServer)
+ 		}
+ 	}
++	if trafficAccountingOptions := experimentalOptions.TrafficAccounting; trafficAccountingOptions != nil && trafficAccountingOptions.Enabled {
++		trafficAccountingService := trafficaccounting.New(
++			logFactory.NewLogger("traffic-accounting"),
++			*trafficAccountingOptions,
++		)
++		router.AppendTracker(trafficAccountingService)
++		internalServices = append(internalServices, trafficAccountingService)
++	}
+ 	if ntpOptions.Enabled {
+ 		ntpDialer, err := dialer.New(ctx, ntpOptions.DialerOptions, ntpOptions.ServerIsDomain())
+ 		if err != nil {
+--- a/option/experimental.go
++++ b/option/experimental.go
+@@ -3,12 +3,18 @@
+ import "github.com/sagernet/sing/common/json/badoption"
+ 
+ type ExperimentalOptions struct {
+-	CacheFile *CacheFileOptions `json:"cache_file,omitempty"`
+-	ClashAPI  *ClashAPIOptions  `json:"clash_api,omitempty"`
+-	V2RayAPI  *V2RayAPIOptions  `json:"v2ray_api,omitempty"`
+-	Debug     *DebugOptions     `json:"debug,omitempty"`
++	CacheFile         *CacheFileOptions         `json:"cache_file,omitempty"`
++	ClashAPI          *ClashAPIOptions          `json:"clash_api,omitempty"`
++	V2RayAPI          *V2RayAPIOptions          `json:"v2ray_api,omitempty"`
++	Debug             *DebugOptions             `json:"debug,omitempty"`
++	TrafficAccounting *TrafficAccountingOptions `json:"traffic_accounting,omitempty"`
+ }
+ 
++type TrafficAccountingOptions struct {
++	Enabled    bool   `json:"enabled,omitempty"`
++	SocketPath string `json:"socket_path,omitempty"`
++}
++
+ type CacheFileOptions struct {
+ 	Enabled     bool               `json:"enabled,omitempty"`
+ 	Path        string             `json:"path,omitempty"`
+--- /dev/null
++++ b/experimental/trafficaccounting/service.go
+@@ -0,0 +1,291 @@
++package trafficaccounting
++
++import (
++	"context"
++	"crypto/rand"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"net"
++	"os"
++	"path/filepath"
++	"sync"
++	"sync/atomic"
++	"syscall"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/log"
++	"github.com/sagernet/sing-box/option"
++	"github.com/sagernet/sing/common/bufio"
++	N "github.com/sagernet/sing/common/network"
++)
++
++const snapshotVersion = 1
++
++var (
++	_ adapter.ConnectionTracker = (*Service)(nil)
++	_ adapter.LifecycleService  = (*Service)(nil)
++)
++
++type Snapshot struct {
++	Version             int    `json:"version"`
++	SessionIdentifier   string `json:"session_identifier"`
++	ProxyUploadBytes    uint64 `json:"proxy_upload_bytes"`
++	ProxyDownloadBytes  uint64 `json:"proxy_download_bytes"`
++	DirectUploadBytes   uint64 `json:"direct_upload_bytes"`
++	DirectDownloadBytes uint64 `json:"direct_download_bytes"`
++}
++
++type Service struct {
++	logger                   log.ContextLogger
++	socketPath               string
++	expectedOwner            uint32
++	sessionIdentifier        string
++	initializationError      error
++	outlineUploadBytes       atomic.Uint64
++	outlineDownloadBytes     atomic.Uint64
++	directUploadBytes        atomic.Uint64
++	directDownloadBytes      atomic.Uint64
++	listenerAccess           sync.Mutex
++	listener                 *net.UnixListener
++	listenerCreated          bool
++	listenerStartAttempted   bool
++	listenerClosed           atomic.Bool
++	listenerAcceptLoopWaiter sync.WaitGroup
++}
++
++func New(logger log.ContextLogger, options option.TrafficAccountingOptions) *Service {
++	return newService(logger, options, 0)
++}
++
++func newService(logger log.ContextLogger, options option.TrafficAccountingOptions, expectedOwner uint32) *Service {
++	sessionIdentifier, err := generateSessionIdentifier()
++	return &Service{
++		logger:              logger,
++		socketPath:          options.SocketPath,
++		expectedOwner:       expectedOwner,
++		sessionIdentifier:   sessionIdentifier,
++		initializationError: err,
++	}
++}
++
++func (s *Service) Name() string {
++	return "traffic accounting"
++}
++
++func (s *Service) Start(stage adapter.StartStage) error {
++	if stage != adapter.StartStateStart {
++		return nil
++	}
++	s.listenerAccess.Lock()
++	if s.listenerStartAttempted {
++		s.listenerAccess.Unlock()
++		return nil
++	}
++	s.listenerStartAttempted = true
++	s.listenerAccess.Unlock()
++
++	if s.initializationError != nil {
++		s.logger.Warn("traffic accounting unavailable: ", s.initializationError)
++		return nil
++	}
++	listener, err := s.openListener()
++	if err != nil {
++		s.logger.Warn("traffic accounting unavailable: ", err)
++		return nil
++	}
++
++	s.listenerAccess.Lock()
++	s.listener = listener
++	s.listenerCreated = true
++	s.listenerAccess.Unlock()
++	s.listenerAcceptLoopWaiter.Add(1)
++	go s.acceptLoop(listener)
++	return nil
++}
++
++func (s *Service) Close() error {
++	s.listenerClosed.Store(true)
++	s.listenerAccess.Lock()
++	listener := s.listener
++	created := s.listenerCreated
++	s.listener = nil
++	s.listenerAccess.Unlock()
++	if listener != nil {
++		_ = listener.Close()
++	}
++	s.listenerAcceptLoopWaiter.Wait()
++	if created {
++		_ = removeSocketIfPresent(s.socketPath)
++	}
++	return nil
++}
++
++func (s *Service) RoutedConnection(
++	_ context.Context,
++	conn net.Conn,
++	_ adapter.InboundContext,
++	_ adapter.Rule,
++	matchOutbound adapter.Outbound,
++) net.Conn {
++	if matchOutbound == nil {
++		return conn
++	}
++	switch matchOutbound.Tag() {
++	case "outline":
++		return bufio.NewCounterConn(
++			conn,
++			[]N.CountFunc{s.counter(&s.outlineUploadBytes)},
++			[]N.CountFunc{s.counter(&s.outlineDownloadBytes)},
++		)
++	case "direct":
++		return bufio.NewCounterConn(
++			conn,
++			[]N.CountFunc{s.counter(&s.directUploadBytes)},
++			[]N.CountFunc{s.counter(&s.directDownloadBytes)},
++		)
++	default:
++		return conn
++	}
++}
++
++func (s *Service) RoutedPacketConnection(
++	_ context.Context,
++	conn N.PacketConn,
++	_ adapter.InboundContext,
++	_ adapter.Rule,
++	matchOutbound adapter.Outbound,
++) N.PacketConn {
++	if matchOutbound == nil {
++		return conn
++	}
++	switch matchOutbound.Tag() {
++	case "outline":
++		return bufio.NewCounterPacketConn(
++			conn,
++			[]N.CountFunc{s.counter(&s.outlineUploadBytes)},
++			[]N.CountFunc{s.counter(&s.outlineDownloadBytes)},
++		)
++	case "direct":
++		return bufio.NewCounterPacketConn(
++			conn,
++			[]N.CountFunc{s.counter(&s.directUploadBytes)},
++			[]N.CountFunc{s.counter(&s.directDownloadBytes)},
++		)
++	default:
++		return conn
++	}
++}
++
++func (s *Service) Snapshot() Snapshot {
++	return Snapshot{
++		Version:             snapshotVersion,
++		SessionIdentifier:   s.sessionIdentifier,
++		ProxyUploadBytes:    s.outlineUploadBytes.Load(),
++		ProxyDownloadBytes:  s.outlineDownloadBytes.Load(),
++		DirectUploadBytes:   s.directUploadBytes.Load(),
++		DirectDownloadBytes: s.directDownloadBytes.Load(),
++	}
++}
++
++func (s *Service) counter(value *atomic.Uint64) N.CountFunc {
++	return func(count int64) {
++		if count > 0 {
++			value.Add(uint64(count))
++		}
++	}
++}
++
++func (s *Service) openListener() (*net.UnixListener, error) {
++	if err := validateSocketLocation(s.socketPath, s.expectedOwner); err != nil {
++		return nil, err
++	}
++	if err := removeSocketIfPresent(s.socketPath); err != nil {
++		return nil, err
++	}
++	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: s.socketPath, Net: "unix"})
++	if err != nil {
++		return nil, fmt.Errorf("listen on traffic socket: %w", err)
++	}
++	listener.SetUnlinkOnClose(false)
++	if err = os.Chmod(s.socketPath, 0o600); err != nil {
++		_ = listener.Close()
++		_ = removeSocketIfPresent(s.socketPath)
++		return nil, fmt.Errorf("set traffic socket permissions: %w", err)
++	}
++	return listener, nil
++}
++
++func (s *Service) acceptLoop(listener *net.UnixListener) {
++	defer s.listenerAcceptLoopWaiter.Done()
++	for {
++		conn, err := listener.AcceptUnix()
++		if err != nil {
++			if !s.listenerClosed.Load() {
++				s.logger.Warn("traffic accounting listener stopped: ", err)
++			}
++			return
++		}
++		s.writeSnapshot(conn)
++	}
++}
++
++func (s *Service) writeSnapshot(conn *net.UnixConn) {
++	defer conn.Close()
++	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
++	if err := json.NewEncoder(conn).Encode(s.Snapshot()); err != nil {
++		s.logger.Warn("write traffic accounting snapshot: ", err)
++	}
++}
++
++func validateSocketLocation(socketPath string, expectedOwner uint32) error {
++	if !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath {
++		return fmt.Errorf("traffic socket path is not canonical")
++	}
++	parentPath := filepath.Dir(socketPath)
++	resolvedParent, err := filepath.EvalSymlinks(parentPath)
++	if err != nil {
++		return fmt.Errorf("resolve traffic socket directory: %w", err)
++	}
++	if resolvedParent != parentPath {
++		return fmt.Errorf("traffic socket directory contains a symbolic link")
++	}
++	information, err := os.Lstat(parentPath)
++	if err != nil {
++		return fmt.Errorf("inspect traffic socket directory: %w", err)
++	}
++	stat, ok := information.Sys().(*syscall.Stat_t)
++	if !ok || stat.Uid != expectedOwner {
++		return fmt.Errorf("inspect traffic socket directory ownership")
++	}
++	if !information.IsDir() || information.Mode().Perm() != 0o700 {
++		return fmt.Errorf("traffic socket directory must be owner-only")
++	}
++	return nil
++}
++
++func removeSocketIfPresent(socketPath string) error {
++	information, err := os.Lstat(socketPath)
++	if err != nil {
++		if os.IsNotExist(err) {
++			return nil
++		}
++		return fmt.Errorf("inspect traffic socket: %w", err)
++	}
++	if information.Mode()&os.ModeSymlink != 0 || information.Mode()&os.ModeSocket == 0 {
++		return fmt.Errorf("refuse to replace non-socket traffic path")
++	}
++	if err = os.Remove(socketPath); err != nil {
++		return fmt.Errorf("remove stale traffic socket: %w", err)
++	}
++	return nil
++}
++
++func generateSessionIdentifier() (string, error) {
++	identifier := make([]byte, 16)
++	if _, err := rand.Read(identifier); err != nil {
++		return "", fmt.Errorf("generate traffic accounting session identifier: %w", err)
++	}
++	return hex.EncodeToString(identifier), nil
++}
+--- /dev/null
++++ b/experimental/trafficaccounting/service_test.go
+@@ -0,0 +1,440 @@
++package trafficaccounting
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"io"
++	"net"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/log"
++	"github.com/sagernet/sing-box/option"
++	"github.com/sagernet/sing/common/buf"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func TestTCPAccountingDirectionsAndIsolation(t *testing.T) {
++	tests := []struct {
++		name     string
++		tag      string
++		expected Snapshot
++	}{
++		{
++			name: "outline",
++			tag:  "outline",
++			expected: Snapshot{
++				ProxyUploadBytes:   6,
++				ProxyDownloadBytes: 8,
++			},
++		},
++		{
++			name: "direct",
++			tag:  "direct",
++			expected: Snapshot{
++				DirectUploadBytes:   6,
++				DirectDownloadBytes: 8,
++			},
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			service := newCounterTestService(t)
++			connection := &memoryConn{reader: bytes.NewReader([]byte("upload"))}
++			wrapped := service.RoutedConnection(
++				context.Background(),
++				connection,
++				adapter.InboundContext{},
++				nil,
++				taggedOutbound{tag: test.tag},
++			)
++			readBuffer := make([]byte, 32)
++			readCount, err := wrapped.Read(readBuffer)
++			if err != nil && err != io.EOF {
++				t.Fatal(err)
++			}
++			if readCount != 6 {
++				t.Fatalf("unexpected read count: %d", readCount)
++			}
++			writeCount, err := wrapped.Write([]byte("download"))
++			if err != nil {
++				t.Fatal(err)
++			}
++			if writeCount != 8 {
++				t.Fatalf("unexpected write count: %d", writeCount)
++			}
++
++			actual := service.Snapshot()
++			test.expected.Version = snapshotVersion
++			test.expected.SessionIdentifier = actual.SessionIdentifier
++			if actual != test.expected {
++				t.Fatalf("unexpected snapshot: %+v", actual)
++			}
++		})
++	}
++}
++
++func TestUDPAccountingDirectionsAndIsolation(t *testing.T) {
++	for _, tag := range []string{"outline", "direct"} {
++		t.Run(tag, func(t *testing.T) {
++			service := newCounterTestService(t)
++			packetConnection := &memoryPacketConn{readPayload: []byte("uplink")}
++			wrapped := service.RoutedPacketConnection(
++				context.Background(),
++				packetConnection,
++				adapter.InboundContext{},
++				nil,
++				taggedOutbound{tag: tag},
++			)
++			readBuffer := buf.NewPacket()
++			defer readBuffer.Release()
++			if _, err := wrapped.ReadPacket(readBuffer); err != nil {
++				t.Fatal(err)
++			}
++			writeBuffer := buf.As([]byte("downlink"))
++			if err := wrapped.WritePacket(writeBuffer, M.Socksaddr{}); err != nil {
++				t.Fatal(err)
++			}
++
++			snapshot := service.Snapshot()
++			if tag == "outline" {
++				if snapshot.ProxyUploadBytes != 6 || snapshot.ProxyDownloadBytes != 8 ||
++					snapshot.DirectUploadBytes != 0 || snapshot.DirectDownloadBytes != 0 {
++					t.Fatalf("unexpected outline snapshot: %+v", snapshot)
++				}
++			} else if snapshot.DirectUploadBytes != 6 || snapshot.DirectDownloadBytes != 8 ||
++				snapshot.ProxyUploadBytes != 0 || snapshot.ProxyDownloadBytes != 0 {
++				t.Fatalf("unexpected direct snapshot: %+v", snapshot)
++			}
++		})
++	}
++}
++
++func TestUnknownAndUnselectedOutboundsAreNotTracked(t *testing.T) {
++	service := newCounterTestService(t)
++	connection := &memoryConn{reader: bytes.NewReader([]byte("payload"))}
++	if wrapped := service.RoutedConnection(
++		context.Background(), connection, adapter.InboundContext{}, nil, taggedOutbound{tag: "other"},
++	); wrapped != connection {
++		t.Fatal("unknown outbound was wrapped")
++	}
++	if wrapped := service.RoutedConnection(
++		context.Background(), connection, adapter.InboundContext{}, nil, nil,
++	); wrapped != connection {
++		t.Fatal("missing outbound was wrapped")
++	}
++	assertZeroCounters(t, service.Snapshot())
++}
++
++func TestCountersAreMonotonicAndSnapshotsDoNotReset(t *testing.T) {
++	service := newCounterTestService(t)
++	connection := &memoryConn{reader: bytes.NewReader([]byte("firstsecond"))}
++	wrapped := service.RoutedConnection(
++		context.Background(), connection, adapter.InboundContext{}, nil, taggedOutbound{tag: "outline"},
++	)
++	firstRead := make([]byte, 5)
++	if _, err := wrapped.Read(firstRead); err != nil {
++		t.Fatal(err)
++	}
++	first := service.Snapshot()
++	second := service.Snapshot()
++	if first != second || first.ProxyUploadBytes != 5 {
++		t.Fatalf("snapshot query changed counters: first=%+v second=%+v", first, second)
++	}
++	remaining := make([]byte, 32)
++	if _, err := wrapped.Read(remaining); err != nil && err != io.EOF {
++		t.Fatal(err)
++	}
++	third := service.Snapshot()
++	if third.ProxyUploadBytes < second.ProxyUploadBytes || third.ProxyUploadBytes != 11 {
++		t.Fatalf("counter is not monotonic: second=%+v third=%+v", second, third)
++	}
++}
++
++func TestNewServicesStartAtZeroWithDifferentSessions(t *testing.T) {
++	first := newCounterTestService(t).Snapshot()
++	second := newCounterTestService(t).Snapshot()
++	assertZeroCounters(t, first)
++	assertZeroCounters(t, second)
++	if first.SessionIdentifier == "" || second.SessionIdentifier == "" {
++		t.Fatal("session identifier is empty")
++	}
++	if first.SessionIdentifier == second.SessionIdentifier {
++		t.Fatal("new services reused a session identifier")
++	}
++}
++
++func TestSnapshotJSONSchema(t *testing.T) {
++	snapshot := newCounterTestService(t).Snapshot()
++	data, err := json.Marshal(snapshot)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var object map[string]any
++	if err = json.Unmarshal(data, &object); err != nil {
++		t.Fatal(err)
++	}
++	expectedKeys := []string{
++		"version",
++		"session_identifier",
++		"proxy_upload_bytes",
++		"proxy_download_bytes",
++		"direct_upload_bytes",
++		"direct_download_bytes",
++	}
++	actualKeys := make([]string, 0, len(object))
++	for key := range object {
++		actualKeys = append(actualKeys, key)
++	}
++	if len(actualKeys) != len(expectedKeys) {
++		t.Fatalf("unexpected snapshot keys: %v", actualKeys)
++	}
++	for _, key := range expectedKeys {
++		if _, loaded := object[key]; !loaded {
++			t.Fatalf("missing snapshot key: %s", key)
++		}
++	}
++	if object["version"] != float64(snapshotVersion) {
++		t.Fatalf("unexpected snapshot version: %v", object["version"])
++	}
++}
++
++func TestSocketReturnsOneBoundedSnapshotWithoutRequestAndCloses(t *testing.T) {
++	service, socketPath := newSocketTestService(t)
++	startService(t, service)
++	defer service.Close()
++
++	connection, err := net.DialTimeout("unix", socketPath, time.Second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	data, err := io.ReadAll(connection)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(data) == 0 || len(data) > 4096 {
++		t.Fatalf("unexpected response size: %d", len(data))
++	}
++	var snapshot Snapshot
++	if err = json.Unmarshal(data, &snapshot); err != nil {
++		t.Fatal(err)
++	}
++	if snapshot.Version != snapshotVersion || snapshot.SessionIdentifier == "" {
++		t.Fatalf("unexpected snapshot: %+v", snapshot)
++	}
++	if _, err = connection.Read(make([]byte, 1)); err != io.EOF {
++		t.Fatalf("connection did not close after one snapshot: %v", err)
++	}
++}
++
++func TestSocketModeAndNormalCleanup(t *testing.T) {
++	service, socketPath := newSocketTestService(t)
++	startService(t, service)
++	information, err := os.Lstat(socketPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if information.Mode()&os.ModeSocket == 0 || information.Mode().Perm() != 0o600 {
++		t.Fatalf("unexpected socket mode: %v", information.Mode())
++	}
++	if err = service.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = os.Lstat(socketPath); !os.IsNotExist(err) {
++		t.Fatalf("socket remains after close: %v", err)
++	}
++}
++
++func TestStaleSocketIsSafelyReplaced(t *testing.T) {
++	service, socketPath := newSocketTestService(t)
++	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	stale.SetUnlinkOnClose(false)
++	if err = stale.Close(); err != nil {
++		t.Fatal(err)
++	}
++
++	startService(t, service)
++	defer service.Close()
++	connection, err := net.DialTimeout("unix", socketPath, time.Second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	_ = connection.Close()
++}
++
++func TestRegularFileAtSocketPathIsRetainedAndForwardingCountersWork(t *testing.T) {
++	service, socketPath := newSocketTestService(t)
++	content := []byte("retain")
++	if err := os.WriteFile(socketPath, content, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	startService(t, service)
++	actual, err := os.ReadFile(socketPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Equal(actual, content) {
++		t.Fatalf("regular file changed: %q", actual)
++	}
++
++	connection := &memoryConn{reader: bytes.NewReader([]byte("counted"))}
++	wrapped := service.RoutedConnection(
++		context.Background(), connection, adapter.InboundContext{}, nil, taggedOutbound{tag: "outline"},
++	)
++	if _, err = wrapped.Read(make([]byte, 16)); err != nil && err != io.EOF {
++		t.Fatal(err)
++	}
++	if service.Snapshot().ProxyUploadBytes != 7 {
++		t.Fatal("listener failure disabled forwarding counters")
++	}
++}
++
++func TestSymlinkAtSocketPathIsRetained(t *testing.T) {
++	service, socketPath := newSocketTestService(t)
++	targetPath := filepath.Join(filepath.Dir(socketPath), "target")
++	if err := os.WriteFile(targetPath, []byte("retain"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(targetPath, socketPath); err != nil {
++		t.Fatal(err)
++	}
++	startService(t, service)
++	information, err := os.Lstat(socketPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if information.Mode()&os.ModeSymlink == 0 {
++		t.Fatal("socket-path symlink was removed or followed")
++	}
++}
++
++func TestSocketQueriesDoNotResetCounters(t *testing.T) {
++	service, socketPath := newSocketTestService(t)
++	connection := &memoryConn{reader: bytes.NewReader([]byte("persistent"))}
++	wrapped := service.RoutedConnection(
++		context.Background(), connection, adapter.InboundContext{}, nil, taggedOutbound{tag: "direct"},
++	)
++	if _, err := wrapped.Read(make([]byte, 16)); err != nil && err != io.EOF {
++		t.Fatal(err)
++	}
++	startService(t, service)
++	defer service.Close()
++	first := readSocketSnapshot(t, socketPath)
++	second := readSocketSnapshot(t, socketPath)
++	if first != second || first.DirectUploadBytes != 10 {
++		t.Fatalf("socket query reset counters: first=%+v second=%+v", first, second)
++	}
++}
++
++func newCounterTestService(t *testing.T) *Service {
++	t.Helper()
++	return newService(
++		log.NewNOPFactory().NewLogger("traffic-accounting-test"),
++		option.TrafficAccountingOptions{Enabled: true},
++		uint32(os.Getuid()),
++	)
++}
++
++func newSocketTestService(t *testing.T) (*Service, string) {
++	t.Helper()
++	directory, err := os.MkdirTemp("/private/tmp", "sp-ta-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(directory) })
++	if err := os.Chmod(directory, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	socketPath := filepath.Join(directory, "traffic.sock")
++	service := newService(
++		log.NewNOPFactory().NewLogger("traffic-accounting-test"),
++		option.TrafficAccountingOptions{Enabled: true, SocketPath: socketPath},
++		uint32(os.Getuid()),
++	)
++	return service, socketPath
++}
++
++func startService(t *testing.T, service *Service) {
++	t.Helper()
++	if err := service.Start(adapter.StartStateStart); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func readSocketSnapshot(t *testing.T, socketPath string) Snapshot {
++	t.Helper()
++	connection, err := net.DialTimeout("unix", socketPath, time.Second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer connection.Close()
++	var snapshot Snapshot
++	if err = json.NewDecoder(io.LimitReader(connection, 4096)).Decode(&snapshot); err != nil {
++		t.Fatal(err)
++	}
++	return snapshot
++}
++
++func assertZeroCounters(t *testing.T, snapshot Snapshot) {
++	t.Helper()
++	if snapshot.Version != snapshotVersion || snapshot.SessionIdentifier == "" ||
++		snapshot.ProxyUploadBytes != 0 || snapshot.ProxyDownloadBytes != 0 ||
++		snapshot.DirectUploadBytes != 0 || snapshot.DirectDownloadBytes != 0 {
++		t.Fatalf("unexpected initial snapshot: %+v", snapshot)
++	}
++}
++
++type taggedOutbound struct {
++	adapter.Outbound
++	tag string
++}
++
++func (o taggedOutbound) Tag() string {
++	return o.tag
++}
++
++type memoryConn struct {
++	reader *bytes.Reader
++	writer bytes.Buffer
++}
++
++func (c *memoryConn) Read(data []byte) (int, error)    { return c.reader.Read(data) }
++func (c *memoryConn) Write(data []byte) (int, error)   { return c.writer.Write(data) }
++func (c *memoryConn) Close() error                     { return nil }
++func (c *memoryConn) LocalAddr() net.Addr              { return &net.UnixAddr{Name: "local"} }
++func (c *memoryConn) RemoteAddr() net.Addr             { return &net.UnixAddr{Name: "remote"} }
++func (c *memoryConn) SetDeadline(time.Time) error      { return nil }
++func (c *memoryConn) SetReadDeadline(time.Time) error  { return nil }
++func (c *memoryConn) SetWriteDeadline(time.Time) error { return nil }
++
++type memoryPacketConn struct {
++	readPayload []byte
++	writes      [][]byte
++}
++
++func (c *memoryPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
++	_, err := buffer.Write(c.readPayload)
++	return M.Socksaddr{}, err
++}
++
++func (c *memoryPacketConn) WritePacket(buffer *buf.Buffer, _ M.Socksaddr) error {
++	c.writes = append(c.writes, bytes.Clone(buffer.Bytes()))
++	return nil
++}
++
++func (c *memoryPacketConn) Close() error                     { return nil }
++func (c *memoryPacketConn) LocalAddr() net.Addr              { return &net.UnixAddr{Name: "local"} }
++func (c *memoryPacketConn) SetDeadline(time.Time) error      { return nil }
++func (c *memoryPacketConn) SetReadDeadline(time.Time) error  { return nil }
++func (c *memoryPacketConn) SetWriteDeadline(time.Time) error { return nil }
++
++var _ net.Conn = (*memoryConn)(nil)
++var _ N.PacketConn = (*memoryPacketConn)(nil)
+

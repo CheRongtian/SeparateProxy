@@ -102,10 +102,29 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
         }
     }
 
+    public struct Experimental: Codable, Equatable, Sendable {
+        public struct TrafficAccounting: Codable, Equatable, Sendable {
+            public let enabled: Bool
+            public let socketPath: String
+
+            enum CodingKeys: String, CodingKey {
+                case enabled
+                case socketPath = "socket_path"
+            }
+        }
+
+        public let trafficAccounting: TrafficAccounting
+
+        enum CodingKeys: String, CodingKey {
+            case trafficAccounting = "traffic_accounting"
+        }
+    }
+
     public let log: Log
     public let inbounds: [Inbound]
     public let outbounds: [Outbound]
     public let route: Route
+    public let experimental: Experimental
 
     public func encodedJSON() throws -> Data {
         let encoder = JSONEncoder()
@@ -202,7 +221,8 @@ public enum SingBoxConfigurationBuilder {
                     )
                 ],
                 final: "direct"
-            )
+            ),
+            experimental: trafficAccountingConfiguration
         )
     }
 
@@ -239,7 +259,8 @@ public enum SingBoxConfigurationBuilder {
                     autoDetectInterface: chromeConfiguration.route.autoDetectInterface,
                     rules: chromeConfiguration.route.rules + codexRules,
                     final: chromeConfiguration.route.final
-                )
+                ),
+                experimental: chromeConfiguration.experimental
             )
         }
 
@@ -280,9 +301,17 @@ public enum SingBoxConfigurationBuilder {
                 autoDetectInterface: true,
                 rules: codexRules,
                 final: "direct"
-            )
+            ),
+            experimental: trafficAccountingConfiguration
         )
     }
+
+    private static let trafficAccountingConfiguration = SingBoxConfiguration.Experimental(
+        trafficAccounting: .init(
+            enabled: true,
+            socketPath: TrafficAccountingConstants.socketPath
+        )
+    )
 
     private static func makeCodexRules(
         executablePath: String,

@@ -11,13 +11,18 @@ struct ContentView: View {
             applicationSection
             developerToolsSection
             Divider()
-            chromeDNSSection
-            Divider()
             statusSection
+            trafficSection
             controls
         }
         .padding(24)
         .frame(width: 560)
+        .onAppear {
+            viewModel.trafficPresentationAppeared()
+        }
+        .onDisappear {
+            viewModel.trafficPresentationDisappeared()
+        }
     }
 
     private var header: some View {
@@ -69,18 +74,28 @@ struct ContentView: View {
                 .font(.headline)
 
             if let chrome = viewModel.chrome {
-                Toggle(isOn: $viewModel.chromeIsSelected) {
-                    HStack(spacing: 10) {
-                        Image(nsImage: chrome.icon)
-                            .resizable()
-                            .frame(width: 32, height: 32)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(chrome.name)
-                            Text(chrome.bundleURL.path)
+                HStack(alignment: .top, spacing: 8) {
+                    Toggle(isOn: $viewModel.chromeIsSelected) {
+                        HStack(spacing: 10) {
+                            Image(nsImage: chrome.icon)
+                                .resizable()
+                                .frame(width: 32, height: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(chrome.name)
+                                Text(chrome.bundleURL.path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 4) {
+                                    Text("Secure DNS:")
+                                    Text(viewModel.chromeDNSStateLabel)
+                                        .foregroundStyle(chromeDNSStatusColor)
+                                }
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .help(viewModel.chromeDNSMessage)
+                            }
                         }
                     }
+                    chromeDNSMenu
                 }
             } else {
                 Label("Google Chrome was not found.", systemImage: "app.dashed")
@@ -138,51 +153,79 @@ struct ContentView: View {
         }
     }
 
-    private var chromeDNSSection: some View {
+    private var trafficSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Chrome DNS Integration")
+                Text("Traffic")
                     .font(.headline)
                 Spacer()
-                Text(viewModel.chromeDNSStateLabel)
-                    .font(.subheadline.bold())
-                    .foregroundStyle(chromeDNSStatusColor)
-            }
-
-            Text(viewModel.chromeDNSMessage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Chrome prefers Cloudflare DoH. If DoH is unavailable in automatic mode, Chrome may fall back to the macOS system resolver.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                switch viewModel.chromeDNSState {
-                case .notConfigured, .chromeRunning, .readyToConfigure:
-                    Button(viewModel.chromeDNSConfigureButtonTitle) {
-                        viewModel.configureChromeDNS()
-                    }
-                    .buttonStyle(.borderedProminent)
-                case .configuring:
-                    ProgressView()
-                    Text("Updating Chrome DNS integration...")
+                if viewModel.trafficIsUnavailable {
+                    Text("Traffic unavailable")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                case .configured:
-                    if viewModel.chromeDNSCanRemove {
-                        Button(viewModel.chromeDNSRemoveButtonTitle, role: .destructive) {
-                            viewModel.removeChromeDNSIntegration()
-                        }
-                    }
-                case .modifiedExternally, .unsupported, .error:
-                    EmptyView()
                 }
-                Spacer()
             }
+
+            trafficRow(
+                title: "Proxy",
+                upload: viewModel.proxyUploadSpeedLabel,
+                download: viewModel.proxyDownloadSpeedLabel
+            )
+            trafficRow(
+                title: "Direct",
+                upload: viewModel.directUploadSpeedLabel,
+                download: viewModel.directDownloadSpeedLabel
+            )
         }
+    }
+
+    private func trafficRow(
+        title: String,
+        upload: String,
+        download: String
+    ) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .frame(width: 52, alignment: .leading)
+            Spacer()
+            Label(upload, systemImage: "arrow.up")
+                .frame(width: 112, alignment: .trailing)
+            Label(download, systemImage: "arrow.down")
+                .frame(width: 112, alignment: .trailing)
+        }
+        .font(.callout.monospacedDigit())
+    }
+
+    private var chromeDNSMenu: some View {
+        Menu {
+            switch viewModel.chromeDNSState {
+            case .notConfigured, .chromeRunning, .readyToConfigure:
+                Button(viewModel.chromeDNSConfigureButtonTitle) {
+                    viewModel.configureChromeDNS()
+                }
+            case .configuring:
+                Button("Updating Secure DNS...") {}
+                    .disabled(true)
+            case .configured:
+                if viewModel.chromeDNSCanRemove {
+                    Button(viewModel.chromeDNSRemoveButtonTitle, role: .destructive) {
+                        viewModel.removeChromeDNSIntegration()
+                    }
+                }
+            case .modifiedExternally, .unsupported, .error:
+                EmptyView()
+            }
+
+            Divider()
+            Button("Refresh Secure DNS Status") {
+                viewModel.refresh()
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Secure DNS Actions")
     }
 
     private var chromeDNSStatusColor: Color {

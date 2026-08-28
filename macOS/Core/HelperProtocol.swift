@@ -34,6 +34,16 @@ public enum HelperReplyKey {
     public static let message = "message"
 }
 
+public enum TrafficAccountingReplyKey {
+    public static let success = "success"
+    public static let message = "message"
+    public static let sessionIdentifier = "sessionIdentifier"
+    public static let proxyUploadBytes = "proxyUploadBytes"
+    public static let proxyDownloadBytes = "proxyDownloadBytes"
+    public static let directUploadBytes = "directUploadBytes"
+    public static let directDownloadBytes = "directDownloadBytes"
+}
+
 @objc public protocol SeparateProxyHelperProtocol {
     func status(withReply reply: @escaping (NSDictionary) -> Void)
 
@@ -46,6 +56,8 @@ public enum HelperReplyKey {
     )
 
     func stopProxy(withReply reply: @escaping (NSDictionary) -> Void)
+
+    func getTrafficCounters(withReply reply: @escaping (NSDictionary) -> Void)
 }
 
 public enum CodeSigningRequirementBuilder {

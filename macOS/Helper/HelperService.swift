@@ -5,10 +5,12 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
     private let queue = DispatchQueue(label: "com.cherongtian.SeparateProxy.Helper.operations")
     private let runtimeStore: SecureRuntimeStore
     private let controller: SingBoxController
+    private let trafficAccountingReader: TrafficAccountingReader
 
     override init() {
         let runtimeStore = SecureRuntimeStore()
         self.runtimeStore = runtimeStore
+        trafficAccountingReader = TrafficAccountingReader()
         do {
             controller = try SingBoxController(runtimeStore: runtimeStore)
         } catch {
@@ -100,6 +102,17 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                 reply(self.reply(success: true, state: .stopped, message: "The proxy is stopped."))
             } catch {
                 reply(self.reply(success: false, state: .error, message: error.localizedDescription))
+            }
+        }
+    }
+
+    func getTrafficCounters(withReply reply: @escaping (NSDictionary) -> Void) {
+        queue.async {
+            do {
+                let snapshot = try self.trafficAccountingReader.readSnapshot()
+                reply(TrafficAccountingReplyBuilder.success(snapshot))
+            } catch {
+                reply(TrafficAccountingReplyBuilder.failure(error))
             }
         }
     }

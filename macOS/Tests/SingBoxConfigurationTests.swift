@@ -53,6 +53,11 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertNil(configuration.route.rules[1].overrideDestination)
         XCTAssertEqual(configuration.route.rules[1].outbound, "outline")
         XCTAssertEqual(configuration.route.final, "direct")
+        XCTAssertTrue(configuration.experimental.trafficAccounting.enabled)
+        XCTAssertEqual(
+            configuration.experimental.trafficAccounting.socketPath,
+            TrafficAccountingConstants.socketPath
+        )
     }
 
     func testCodexDisabledIsFieldForFieldEqualToChromeBaseline() throws {
@@ -68,7 +73,13 @@ final class SingBoxConfigurationTests: XCTestCase {
         )
 
         XCTAssertEqual(codexDisabled, baseline)
-        XCTAssertEqual(try codexDisabled.encodedJSON(), try baseline.encodedJSON())
+        let codexDisabledJSON = try JSONSerialization.jsonObject(
+            with: codexDisabled.encodedJSON()
+        ) as? NSDictionary
+        let baselineJSON = try JSONSerialization.jsonObject(
+            with: baseline.encodedJSON()
+        ) as? NSDictionary
+        XCTAssertEqual(codexDisabledJSON, baselineJSON)
     }
 
     func testCodexEnabledOnlyAppendsSniffAndExactRouteAfterChromeRules() throws {
@@ -170,6 +181,16 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(rules.count, 2)
         XCTAssertFalse(rules.contains { $0["action"] as? String == "sniff" })
         XCTAssertFalse(rules.contains { $0["override_destination"] != nil })
+        let experimental = try XCTUnwrap(object["experimental"] as? [String: Any])
+        let trafficAccounting = try XCTUnwrap(
+            experimental["traffic_accounting"] as? [String: Any]
+        )
+        XCTAssertEqual(trafficAccounting["enabled"] as? Bool, true)
+        XCTAssertEqual(
+            trafficAccounting["socket_path"] as? String,
+            TrafficAccountingConstants.socketPath
+        )
+        XCTAssertEqual(Set(trafficAccounting.keys), ["enabled", "socket_path"])
     }
 
     func testCodexSniffJSONUsesPatchedSchemaAndKeepsRoutePlain() throws {

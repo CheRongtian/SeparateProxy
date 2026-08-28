@@ -24,8 +24,13 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var chrome: DiscoveredApplication?
     @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
     @Published private(set) var vsCodeBundleURL: URL?
-    @Published private(set) var state: ProxyState = .helperNotInstalled
+    @Published private(set) var state: ProxyState = .helperNotInstalled {
+        didSet {
+            synchronizeTrafficPolling()
+        }
+    }
     @Published private(set) var message = "Helper setup is required."
+    @Published private(set) var trafficDisplayState: TrafficDisplayState = .sessionUnavailable
     @Published private(set) var chromeDNSState: ChromeDNSIntegrationState = .notConfigured
     @Published private(set) var chromeDNSMessage = "Chrome DNS integration has not been checked."
     @Published private(set) var chromeDNSCanRemove = false
@@ -38,6 +43,11 @@ final class ProxyViewModel: ObservableObject {
     private let helperService = SMAppService.daemon(
         plistName: SeparateProxyIdentifiers.helperPlist
     )
+    private var trafficPresentation = TrafficPresentationModel()
+    private var trafficPollingTask: Task<Void, Never>?
+    private var trafficQueryIsInFlight = false
+    private var trafficPollingGeneration: UInt64 = 0
+    private var trafficPresentationIsVisible = false
 
     init() {
         if UserDefaults.standard.object(forKey: Self.chromeSelectionKey) == nil {
@@ -63,6 +73,26 @@ final class ProxyViewModel: ObservableObject {
 
     var canStop: Bool {
         state == .running
+    }
+
+    var trafficIsUnavailable: Bool {
+        trafficDisplayState == .accountingUnavailable
+    }
+
+    var proxyUploadSpeedLabel: String {
+        formattedTrafficRate(\.proxyUploadBytesPerSecond)
+    }
+
+    var proxyDownloadSpeedLabel: String {
+        formattedTrafficRate(\.proxyDownloadBytesPerSecond)
+    }
+
+    var directUploadSpeedLabel: String {
+        formattedTrafficRate(\.directUploadBytesPerSecond)
+    }
+
+    var directDownloadSpeedLabel: String {
+        formattedTrafficRate(\.directDownloadBytesPerSecond)
     }
 
     var stateLabel: String {
@@ -173,6 +203,16 @@ final class ProxyViewModel: ObservableObject {
 
     func refresh() {
         refreshLocalState()
+    }
+
+    func trafficPresentationAppeared() {
+        trafficPresentationIsVisible = true
+        synchronizeTrafficPolling()
+    }
+
+    func trafficPresentationDisappeared() {
+        trafficPresentationIsVisible = false
+        stopTrafficPolling()
     }
 
     func configureChromeDNS() {
@@ -412,5 +452,78 @@ final class ProxyViewModel: ObservableObject {
             state = newState
             message = replyMessage
         }
+    }
+
+    private func synchronizeTrafficPolling() {
+        if state == .running, trafficPresentationIsVisible {
+            startTrafficPolling()
+        } else {
+            stopTrafficPolling()
+        }
+    }
+
+    private func startTrafficPolling() {
+        guard trafficPresentation.beginPolling() else {
+            return
+        }
+        trafficDisplayState = trafficPresentation.displayState
+        trafficPollingGeneration &+= 1
+        let generation = trafficPollingGeneration
+        trafficPollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else {
+                    return
+                }
+                self.pollTrafficCounters(generation: generation)
+                do {
+                    try await Task.sleep(for: TrafficAccountingConstants.pollingInterval)
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopTrafficPolling() {
+        trafficPollingGeneration &+= 1
+        trafficPollingTask?.cancel()
+        trafficPollingTask = nil
+        trafficQueryIsInFlight = false
+        trafficPresentation.stopPolling()
+        trafficDisplayState = trafficPresentation.displayState
+    }
+
+    private func pollTrafficCounters(generation: UInt64) {
+        guard !trafficQueryIsInFlight else {
+            return
+        }
+        trafficQueryIsInFlight = true
+        helperClient.trafficCounters { [weak self] result in
+            Task { @MainActor in
+                guard let self,
+                      self.trafficPollingGeneration == generation,
+                      self.state == .running,
+                      self.trafficPresentationIsVisible else {
+                    return
+                }
+                self.trafficQueryIsInFlight = false
+                switch result {
+                case let .success(snapshot):
+                    self.trafficPresentation.update(snapshot)
+                case .failure:
+                    self.trafficPresentation.markAccountingUnavailable()
+                }
+                self.trafficDisplayState = self.trafficPresentation.displayState
+            }
+        }
+    }
+
+    private func formattedTrafficRate(
+        _ keyPath: KeyPath<TrafficRates, Double>
+    ) -> String {
+        guard case let .active(rates) = trafficDisplayState else {
+            return "—"
+        }
+        return TrafficRateFormatter.string(from: rates[keyPath: keyPath])
     }
 }

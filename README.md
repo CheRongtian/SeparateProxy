@@ -30,6 +30,7 @@ The macOS app provides:
 - a privileged helper registered with `SMAppService`;
 - mutually authenticated XPC between the app and helper;
 - a bundled, project-private, patched sing-box 1.13.19 binary;
+- session-level Proxy and Direct traffic counters exposed through a root-only read-only path;
 - root-owned runtime configuration, log, and PID files.
 
 It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, speed tests, automatic node selection, global DNS interception, arbitrary application rules, child-process inheritance, custom TUN/Shadowsocks implementations, or whole-VS-Code routing.
@@ -68,7 +69,8 @@ privileged helper
   |-- validate target identity and paths
   |-- generate root-owned runtime config
   |-- validate it with bundled sing-box
-  `-- start bundled sing-box
+  |-- start bundled sing-box
+  `-- read traffic snapshots from a fixed root-only Unix socket
           |
           v
 macOS TUN, stack: system
@@ -303,6 +305,67 @@ The record is stored at:
 
 It contains no Outline key and no full Local State backup. Removal restores the three original states only when all current values, including the complete templates String, still exactly match the values written by SeparateProxy. External changes are left untouched and reported.
 
+## Traffic accounting
+
+The generated runtime config enables the project-private accounting extension at one fixed path:
+
+```json
+{
+  "experimental": {
+    "traffic_accounting": {
+      "enabled": true,
+      "socket_path": "/Library/Application Support/SeparateProxy/runtime/traffic.sock"
+    }
+  }
+}
+```
+
+The patched sing-box process maintains four monotonic, session-level counters:
+
+```text
+Proxy / Outline upload
+Proxy / Outline download
+Direct-through-SeparateProxy upload
+Direct-through-SeparateProxy download
+```
+
+Each normal TCP or UDP flow is counted once after route selection, according to its final outbound tag. `outline` and `direct` are the only tracked tags. Reject actions and unrecognized outbounds are excluded.
+
+Upload and download use the application's point of view. Upload is data read from the application-side connection and sent toward the selected outbound. Download is data written back toward the application. Both groups are measured at the same application-side logical layer. Counts include TLS or QUIC protocol bytes carried by that layer and exclude IP, TCP, UDP, Shadowsocks encryption, framing, and physical-interface overhead. Proxy totals therefore do not represent encrypted Shadowsocks wire usage.
+
+Direct totals cover traffic that entered the normal SeparateProxy sing-box TCP/UDP Router path and selected the `direct` outbound. They do not represent all direct traffic on the Mac. Traffic that bypasses the TUN, loopback and local fast paths, ICMP/direct-route fast paths, rejected traffic, sing-box's own physical-interface sockets, and other traffic outside the normal accounted Router path may be absent.
+
+### Read-only data path
+
+```text
+sing-box atomic counters
+  -> root-owned traffic.sock
+  -> privileged helper
+  -> authenticated XPC query
+  -> Swift cumulative snapshot and rate calculator
+```
+
+The Unix socket protocol accepts no command. On connection, sing-box immediately writes one versioned JSON snapshot and closes the connection:
+
+```json
+{
+  "version": 1,
+  "session_identifier": "random-process-session",
+  "proxy_upload_bytes": 0,
+  "proxy_download_bytes": 0,
+  "direct_upload_bytes": 0,
+  "direct_download_bytes": 0
+}
+```
+
+The random session identifier is stable for one sing-box process and changes after restart. Counters are never reset by a query. The helper uses the fixed socket path, a one-second connect/read timeout, and a 4 KiB response limit. It validates the root-owned `0700` runtime directory, the root-owned `0600` Unix socket, snapshot version, and schema before returning fixed counter fields over the existing authenticated XPC connection.
+
+Swift derives current bytes per second from successive cumulative snapshots and monotonic elapsed time. A new session identifier or any decreasing counter resets the local baseline and produces zero rates for that sample. No rate history is persisted, and no real-time polling runs without a consumer.
+
+Traffic accounting is observational. Counter initialization, socket creation, snapshot serialization, and helper query failures only make statistics unavailable. Proxy forwarding continues. The forwarding hot path performs atomic additions only; it never performs socket I/O or JSON serialization.
+
+SeparateProxy does not capture packets, retain process/domain/flow history, read system-interface counters, or expose an HTTP, gRPC, Clash, or V2Ray control endpoint for accounting.
+
 ## Runtime configuration and secret lifecycle
 
 The SwiftUI app/helper use:
@@ -311,6 +374,7 @@ The SwiftUI app/helper use:
 /Library/Application Support/SeparateProxy/runtime/config.json
 /Library/Application Support/SeparateProxy/runtime/sing-box.log
 /Library/Application Support/SeparateProxy/runtime/sing-box.pid
+/Library/Application Support/SeparateProxy/runtime/traffic.sock
 ```
 
 This root-owned `config.json` is distinct from repository-local `config.json` generated by the legacy CLI.
@@ -340,7 +404,7 @@ Do not delete runtime files while the proxy is running.
 - The access key uses `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and is absent from UserDefaults, plist, xcconfig, and repository files.
 - The GUI sends it over authenticated XPC for Start. Swift String cleanup is best-effort; deterministic memory zeroization is not claimed.
 - The helper redacts the full key and Shadowsocks password from configuration-check errors.
-- Runtime directories are root-owned `0700`; runtime files are root-owned `0600`.
+- Runtime directories are root-owned `0700`; runtime files and the accounting socket are root-owned `0600`.
 - Directory checks use `lstat`; file operations use directory-relative descriptors, `O_NOFOLLOW`, regular-file/owner checks, and atomic rename.
 - App and helper constrain XPC peers with bundle identifier and Apple Team ID code-signing requirements.
 - The helper canonicalizes and revalidates the Chrome bundle and discovers Codex itself.
@@ -408,21 +472,25 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Chrome/Codex config generation and ordering, exact Codex matching, Codex discovery/validation, signing requirements, synthetic sing-box checks, and Chrome DNS safety/restore behavior.
+They cover Outline parsing, Chrome/Codex config generation and ordering, exact Codex matching, Codex discovery/validation, signing requirements, synthetic sing-box checks, Chrome DNS safety/restore behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
 ### Go patch tests
 
-This repository does not vendor sing-box source, a patch file, or the upstream Go test file. Obtain and patch the exact upstream tree below, add the documented test file, then run:
+This repository does not vendor the upstream sing-box tree. It includes the exact Patch 3 production/test diff at `patches/sing-box-1.13.19-patch3-traffic-accounting.patch`. Apply Patch 1 and Patch 2 as documented below, apply that patch file, then run:
 
 ```bash
 GOCACHE=/private/tmp/separateproxy-go-test-cache \
 GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
 go test ./route/rule
+
+GOCACHE=/private/tmp/separateproxy-go-test-cache \
+GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
+go test ./experimental/trafficaccounting
 ```
 
-The four cases cover default false, explicit true, explicit false, and preservation of `sniffer`/`timeout`.
+The route-rule cases cover Patch 2 defaults and field preservation. The accounting cases cover TCP/UDP direction and isolation, monotonic snapshots, session identity, the fixed JSON schema, one-snapshot socket behavior, permissions, cleanup, safe stale-socket replacement, refusal to delete regular files or symlinks, and listener-failure isolation.
 
 ## Why sing-box is patched
 
@@ -495,9 +563,21 @@ Default remains `false`. `route/route.go`, TLS sniffing, metadata, Shadowsocks, 
 
 No SNI, ECH, timeout, or non-TLS traffic retains the original destination. If that original destination is wrong, the fallback connection may fail.
 
+### Patch 3: minimal outbound traffic accounting
+
+Patch 3 uses the existing Router `ConnectionTracker` hook after the final outbound has been selected. Box initialization registers one tracker only when `experimental.traffic_accounting.enabled` is true. The tracker wraps already-selected `outline` and `direct` TCP/UDP flows with the existing `sing/common/bufio` counter wrappers and four `atomic.Uint64` values.
+
+The patch does not change route selection, TUN, Direct, Shadowsocks, TLS sniffing, destination overrides, or Router forwarding order. It adds a root-only Unix listener that writes one read-only snapshot per connection. Listener and serialization failures are contained inside the optional accounting service and cannot fail Box startup or forwarding.
+
+The exact production and test diff is stored at:
+
+```text
+patches/sing-box-1.13.19-patch3-traffic-accounting.patch
+```
+
 ### Reproduce the patched binary
 
-The repository stores the binary and documented diffs, but no ready-to-apply patch or upstream tree.
+The repository stores the binary, the documented Patch 1/Patch 2 diffs, and a ready-to-apply Patch 3 file. It does not store the upstream tree.
 
 ```bash
 git clone https://github.com/SagerNet/sing-box.git
@@ -506,7 +586,7 @@ git checkout b5ebaa1fc0f2b94256180b95468e73ef53caa27d
 test "$(git rev-parse HEAD)" = b5ebaa1fc0f2b94256180b95468e73ef53caa27d
 ```
 
-Apply both diffs above. Then add `route/rule/rule_action_sniff_override_test.go`:
+Apply Patch 1 and Patch 2 above. Then add `route/rule/rule_action_sniff_override_test.go`:
 
 ```go
 package rule
@@ -555,15 +635,28 @@ func parseRuntimeSniffAction(t *testing.T, input string) *RuleActionSniff {
 }
 ```
 
+Apply Patch 3 from the SeparateProxy repository root path:
+
+```bash
+patch -p1 < /path/to/SeparateProxy/patches/sing-box-1.13.19-patch3-traffic-accounting.patch
+```
+
 Format, test, and build using upstream defaults:
 
 ```bash
 gofmt -w protocol/tun/inbound.go option/rule_action.go \
-  route/rule/rule_action.go route/rule/rule_action_sniff_override_test.go
+  route/rule/rule_action.go route/rule/rule_action_sniff_override_test.go \
+  option/experimental.go box.go \
+  experimental/trafficaccounting/service.go \
+  experimental/trafficaccounting/service_test.go
 
 GOCACHE=/private/tmp/separateproxy-go-test-cache \
 GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
 go test ./route/rule
+
+GOCACHE=/private/tmp/separateproxy-go-test-cache \
+GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
+go test ./experimental/trafficaccounting
 
 GOCACHE=/private/tmp/separateproxy-go-build-cache \
 GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
