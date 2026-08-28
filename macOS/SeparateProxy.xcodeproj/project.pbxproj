@@ -10,6 +10,7 @@
 		300000000000000000000001 /* OutlineAccessKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000001 /* OutlineAccessKey.swift */; };
 		300000000000000000000002 /* SingBoxConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000002 /* SingBoxConfiguration.swift */; };
 		300000000000000000000003 /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000003 /* HelperProtocol.swift */; };
+		300000000000000000000004 /* CodexExtensionDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000004 /* CodexExtensionDiscovery.swift */; };
 		300000000000000000000011 /* SeparateProxyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000011 /* SeparateProxyApp.swift */; };
 		300000000000000000000012 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000012 /* ContentView.swift */; };
 		300000000000000000000013 /* ProxyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000013 /* ProxyViewModel.swift */; };
@@ -25,6 +26,7 @@
 		300000000000000000000032 /* SingBoxConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000032 /* SingBoxConfigurationTests.swift */; };
 		300000000000000000000033 /* ChromeDNSManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000018 /* ChromeDNSManager.swift */; };
 		300000000000000000000034 /* ChromeDNSManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000033 /* ChromeDNSManagerTests.swift */; };
+		300000000000000000000035 /* CodexExtensionDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000034 /* CodexExtensionDiscoveryTests.swift */; };
 		300000000000000000000041 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
 		300000000000000000000042 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
 		300000000000000000000043 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
@@ -94,6 +96,7 @@
 		100000000000000000000001 /* OutlineAccessKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineAccessKey.swift; sourceTree = "<group>"; };
 		100000000000000000000002 /* SingBoxConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingBoxConfiguration.swift; sourceTree = "<group>"; };
 		100000000000000000000003 /* HelperProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperProtocol.swift; sourceTree = "<group>"; };
+		100000000000000000000004 /* CodexExtensionDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexExtensionDiscovery.swift; sourceTree = "<group>"; };
 		100000000000000000000011 /* SeparateProxyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeparateProxyApp.swift; sourceTree = "<group>"; };
 		100000000000000000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		100000000000000000000013 /* ProxyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyViewModel.swift; sourceTree = "<group>"; };
@@ -109,6 +112,7 @@
 		100000000000000000000031 /* OutlineAccessKeyParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineAccessKeyParserTests.swift; sourceTree = "<group>"; };
 		100000000000000000000032 /* SingBoxConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingBoxConfigurationTests.swift; sourceTree = "<group>"; };
 		100000000000000000000033 /* ChromeDNSManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeDNSManagerTests.swift; sourceTree = "<group>"; };
+		100000000000000000000034 /* CodexExtensionDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexExtensionDiscoveryTests.swift; sourceTree = "<group>"; };
 		100000000000000000000041 /* ../bin/sing-box */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = "../bin/sing-box"; sourceTree = "<group>"; };
 		100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.cherongtian.SeparateProxy.Helper.plist; sourceTree = "<group>"; };
 		100000000000000000000051 /* Project.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Project.xcconfig; sourceTree = "<group>"; };
@@ -185,6 +189,7 @@
 				100000000000000000000001 /* OutlineAccessKey.swift */,
 				100000000000000000000002 /* SingBoxConfiguration.swift */,
 				100000000000000000000003 /* HelperProtocol.swift */,
+				100000000000000000000004 /* CodexExtensionDiscovery.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -229,6 +234,7 @@
 				100000000000000000000031 /* OutlineAccessKeyParserTests.swift */,
 				100000000000000000000032 /* SingBoxConfigurationTests.swift */,
 				100000000000000000000033 /* ChromeDNSManagerTests.swift */,
+				100000000000000000000034 /* CodexExtensionDiscoveryTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -413,6 +419,7 @@
 				300000000000000000000001 /* OutlineAccessKey.swift in Sources */,
 				300000000000000000000002 /* SingBoxConfiguration.swift in Sources */,
 				300000000000000000000003 /* HelperProtocol.swift in Sources */,
+				300000000000000000000004 /* CodexExtensionDiscovery.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -424,6 +431,7 @@
 				300000000000000000000032 /* SingBoxConfigurationTests.swift in Sources */,
 				300000000000000000000033 /* ChromeDNSManager.swift in Sources */,
 				300000000000000000000034 /* ChromeDNSManagerTests.swift in Sources */,
+				300000000000000000000035 /* CodexExtensionDiscoveryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

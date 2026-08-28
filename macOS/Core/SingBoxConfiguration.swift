@@ -37,16 +37,46 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
         public struct Rule: Codable, Equatable, Sendable {
             public let processPathRegex: [String]
             public let ipVersion: Int?
+            public let network: String?
+            public let destinationPort: UInt16?
             public let action: String
+            public let sniffer: [String]?
+            public let overrideDestination: Bool?
             public let method: String?
             public let noDrop: Bool?
             public let outbound: String?
 
             enum CodingKeys: String, CodingKey {
-                case action, method, outbound
+                case network, action, sniffer, method, outbound
                 case processPathRegex = "process_path_regex"
                 case ipVersion = "ip_version"
+                case destinationPort = "port"
+                case overrideDestination = "override_destination"
                 case noDrop = "no_drop"
+            }
+
+            public init(
+                processPathRegex: [String],
+                ipVersion: Int? = nil,
+                network: String? = nil,
+                destinationPort: UInt16? = nil,
+                action: String,
+                sniffer: [String]? = nil,
+                overrideDestination: Bool? = nil,
+                method: String? = nil,
+                noDrop: Bool? = nil,
+                outbound: String? = nil
+            ) {
+                self.processPathRegex = processPathRegex
+                self.ipVersion = ipVersion
+                self.network = network
+                self.destinationPort = destinationPort
+                self.action = action
+                self.sniffer = sniffer
+                self.overrideDestination = overrideDestination
+                self.method = method
+                self.noDrop = noDrop
+                self.outbound = outbound
             }
         }
 
@@ -74,11 +104,17 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
 
 public enum SingBoxConfigurationError: LocalizedError, Equatable {
     case invalidChromeBundlePath
+    case invalidCodexExecutablePath
+    case noTargetsSelected
 
     public var errorDescription: String? {
         switch self {
         case .invalidChromeBundlePath:
             return "The Google Chrome application path is invalid."
+        case .invalidCodexExecutablePath:
+            return "The Codex executable path is invalid."
+        case .noTargetsSelected:
+            return "Select at least one proxy target."
         }
     }
 }
@@ -153,5 +189,105 @@ public enum SingBoxConfigurationBuilder {
                 final: "direct"
             )
         )
+    }
+
+    public static func make(
+        outline: OutlineAccessKey,
+        chromeBundlePath: String?,
+        codexExecutablePath: String?
+    ) throws -> SingBoxConfiguration {
+        guard chromeBundlePath != nil || codexExecutablePath != nil else {
+            throw SingBoxConfigurationError.noTargetsSelected
+        }
+
+        if let chromeBundlePath {
+            let chromeConfiguration = try make(
+                outline: outline,
+                chromeBundlePath: chromeBundlePath
+            )
+            guard let codexExecutablePath else {
+                return chromeConfiguration
+            }
+            let codexRules = try makeCodexRules(executablePath: codexExecutablePath)
+            return SingBoxConfiguration(
+                log: chromeConfiguration.log,
+                inbounds: chromeConfiguration.inbounds,
+                outbounds: chromeConfiguration.outbounds,
+                route: .init(
+                    autoDetectInterface: chromeConfiguration.route.autoDetectInterface,
+                    rules: chromeConfiguration.route.rules + codexRules,
+                    final: chromeConfiguration.route.final
+                )
+            )
+        }
+
+        let codexRules = try makeCodexRules(executablePath: codexExecutablePath!)
+        return SingBoxConfiguration(
+            log: .init(level: "info", timestamp: true),
+            inbounds: [
+                .init(
+                    type: "tun",
+                    tag: "tun-in",
+                    address: ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+                    autoRoute: true,
+                    stack: "system"
+                )
+            ],
+            outbounds: [
+                .init(
+                    type: "direct",
+                    tag: "direct",
+                    server: nil,
+                    serverPort: nil,
+                    method: nil,
+                    password: nil
+                ),
+                .init(
+                    type: "shadowsocks",
+                    tag: "outline",
+                    server: outline.server,
+                    serverPort: outline.serverPort,
+                    method: outline.method,
+                    password: outline.password
+                )
+            ],
+            route: .init(
+                autoDetectInterface: true,
+                rules: codexRules,
+                final: "direct"
+            )
+        )
+    }
+
+    private static func makeCodexRules(
+        executablePath: String
+    ) throws -> [SingBoxConfiguration.Route.Rule] {
+        guard executablePath.hasPrefix("/"),
+              URL(fileURLWithPath: executablePath).lastPathComponent == "codex",
+              !executablePath.contains("\n"),
+              !executablePath.contains("\0") else {
+            throw SingBoxConfigurationError.invalidCodexExecutablePath
+        }
+
+        let normalizedPath = URL(fileURLWithPath: executablePath)
+            .standardizedFileURL.path
+        let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
+            .replacingOccurrences(of: #"\/"#, with: "/")
+        let processPathRegex = ["^\(escapedPath)$"]
+        return [
+            .init(
+                processPathRegex: processPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"],
+                overrideDestination: true
+            ),
+            .init(
+                processPathRegex: processPathRegex,
+                action: "route",
+                outbound: "outline"
+            ),
+        ]
     }
 }

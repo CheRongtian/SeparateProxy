@@ -10,8 +10,14 @@ final class ProxyViewModel: ObservableObject {
             UserDefaults.standard.set(chromeIsSelected, forKey: Self.chromeSelectionKey)
         }
     }
+    @Published var codexIsSelected: Bool {
+        didSet {
+            UserDefaults.standard.set(codexIsSelected, forKey: Self.codexSelectionKey)
+        }
+    }
     @Published private(set) var keyIsSaved = false
     @Published private(set) var chrome: DiscoveredApplication?
+    @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
     @Published private(set) var state: ProxyState = .helperNotInstalled
     @Published private(set) var message = "Helper setup is required."
     @Published private(set) var chromeDNSState: ChromeDNSIntegrationState = .notConfigured
@@ -19,6 +25,7 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var chromeDNSCanRemove = false
 
     private static let chromeSelectionKey = "chrome-is-selected"
+    private static let codexSelectionKey = "codex-is-selected"
     private let keychain = KeychainStore()
     private let helperClient = HelperClient()
     private let chromeDNSManager = ChromeDNSManager()
@@ -32,16 +39,20 @@ final class ProxyViewModel: ObservableObject {
         } else {
             chromeIsSelected = UserDefaults.standard.bool(forKey: Self.chromeSelectionKey)
         }
+        codexIsSelected = UserDefaults.standard.bool(forKey: Self.codexSelectionKey)
         refreshLocalState()
     }
 
     var canStart: Bool {
         let canRetry = state == .stopped || state == .error
+        let hasSelection = chromeIsSelected || codexIsSelected
+        let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
+            && (!codexIsSelected || codexTargetState.canSelect)
         return canRetry
             && helperService.status == .enabled
             && keyIsSaved
-            && chromeIsSelected
-            && chrome != nil
+            && hasSelection
+            && selectedTargetsAreAvailable
     }
 
     var canStop: Bool {
@@ -162,9 +173,19 @@ final class ProxyViewModel: ObservableObject {
     }
 
     func start() {
-        guard let chrome, chromeIsSelected else {
+        guard chromeIsSelected || codexIsSelected else {
             state = .error
-            message = "Google Chrome is unavailable or not selected."
+            message = SingBoxConfigurationError.noTargetsSelected.localizedDescription
+            return
+        }
+        if chromeIsSelected, chrome == nil {
+            state = .error
+            message = "Google Chrome is unavailable."
+            return
+        }
+        if codexIsSelected, !codexTargetState.canSelect {
+            state = .error
+            message = "The OpenAI Codex VS Code extension is unavailable."
             return
         }
 
@@ -178,7 +199,8 @@ final class ProxyViewModel: ObservableObject {
             message = "Starting the proxy..."
             helperClient.start(
                 accessKey: accessKey,
-                chromeBundlePath: chrome.bundleURL.path
+                chromeBundlePath: chromeIsSelected ? chrome?.bundleURL.path ?? "" : "",
+                codexEnabled: codexIsSelected
             ) { [weak self] result in
                 Task { @MainActor in
                     self?.applyHelperResult(result)
@@ -204,6 +226,10 @@ final class ProxyViewModel: ObservableObject {
     private func refreshLocalState() {
         keyIsSaved = keychain.containsKey()
         chrome = ApplicationDiscovery.findGoogleChrome()
+        codexTargetState = CodexTargetDiscovery.discover()
+        if !codexTargetState.canSelect {
+            codexIsSelected = false
+        }
         refreshChromeDNSState()
         refreshHelperState()
     }

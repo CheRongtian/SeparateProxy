@@ -1,13 +1,14 @@
 # SeparateProxy
 
-SeparateProxy routes Google Chrome through an existing Outline proxy on macOS while every other application remains on the local connection.
+SeparateProxy routes selected Google Chrome and OpenAI Codex traffic through an existing Outline proxy on macOS while every unmatched process remains on the local connection.
 
 ```text
-Google Chrome -> Outline
-Other apps    -> direct
+Google Chrome                     -> Outline
+OpenAI Codex extension executable -> Outline
+Every unmatched process           -> direct
 ```
 
-The project intentionally supports one static Outline `ss://` access key and one application. It has not been validated with unrelated Shadowsocks services.
+The project intentionally supports one static Outline `ss://` access key, Google Chrome, and the OpenAI Codex native executable installed by the VS Code extension. It has not been validated with unrelated Shadowsocks services.
 
 ## Current scope
 
@@ -15,6 +16,7 @@ The macOS app provides:
 
 - a SwiftUI interface;
 - Google Chrome discovery through Launch Services;
+- active OpenAI Codex VS Code extension discovery through VS Code metadata;
 - one-time Chrome DNS integration with Cloudflare DNS-over-HTTPS;
 - Outline access-key storage in the macOS Keychain;
 - Start Proxy and Stop Proxy controls;
@@ -42,6 +44,8 @@ privileged helper
 macOS TUN, stack: system
   |-- Chrome IPv6 destination -> immediate reject
   |-- remaining Chrome traffic -> Outline
+  |-- Codex TLS/443 -> sniff SNI and replace the destination with the hostname
+  |-- remaining Codex traffic -> Outline
   `-- every unmatched application -> direct
 ```
 
@@ -78,11 +82,36 @@ The generated route section is equivalent to:
 
 Chrome helper processes are covered by the app-bundle path. The configuration does not enumerate Renderer, GPU, Network Service, or other helper names.
 
+When Codex is selected, two rules are appended after the Chrome rules. The first rule is limited to TCP port 443 from the exact validated Codex executable path. It sniffs only TLS and replaces the original IP destination with the sniffed SNI hostname. The second rule routes that exact executable through Outline:
+
+```json
+{
+  "process_path_regex": [
+    "^/Users/example/\\.vscode/extensions/openai\\.chatgpt-1\\.2\\.3-darwin-arm64/bin/macos-aarch64/codex$"
+  ],
+  "network": "tcp",
+  "port": 443,
+  "action": "sniff",
+  "sniffer": ["tls"],
+  "override_destination": true
+},
+{
+  "process_path_regex": [
+    "^/Users/example/\\.vscode/extensions/openai\\.chatgpt-1\\.2\\.3-darwin-arm64/bin/macos-aarch64/codex$"
+  ],
+  "action": "route",
+  "outbound": "outline"
+}
+```
+
+The path is discovered from the active `openai.chatgpt` record and validated against its `package.json`; the version shown above is synthetic. Visual Studio Code, `codex-code-mode-host`, `rg`, shells, Git, Homebrew, and unrelated extension processes remain unmatched and therefore direct.
+
 ## Requirements
 
 - macOS 13 or later on Apple silicon;
 - Xcode with a local Apple Development signing identity;
 - Google Chrome installed in `/Applications`;
+- the OpenAI Codex VS Code extension when the optional Codex target is used;
 - a valid static Outline `ss://` access key;
 - administrator approval for the privileged helper;
 - Chrome initialized at least once so its Local State file exists.
@@ -239,6 +268,8 @@ The test suite covers:
 - SIP002 and legacy Outline key parsing;
 - invalid-key rejection;
 - Chrome-only route generation;
+- Codex-only and combined Chrome/Codex rule ordering;
+- exact Codex process matching and TLS/443 destination-override fields;
 - exact code-signing requirement generation;
 - app/helper bundle-identifier derivation;
 - JSON encoding;
@@ -262,7 +293,11 @@ commit: b5ebaa1fc0f2b94256180b95468e73ef53caa27d
 platform: darwin/arm64
 ```
 
-On the standard Darwin CLI path, the interface snapshot can be populated before the TUN exists. Process lookup then treats the TUN source as non-local and silently skips process discovery. The patch synchronously refreshes interfaces after the TUN is created and configured, before the stack is created.
+SeparateProxy carries two minimal patches against that exact source revision.
+
+### Patch 1: Darwin TUN interface refresh
+
+On the standard Darwin CLI path, the interface snapshot can be populated before the TUN exists. Process lookup then treats the TUN source as non-local and silently skips process discovery. This patch synchronously refreshes interfaces after the TUN is created and configured, before the stack is created.
 
 Only `protocol/tun/inbound.go` is changed:
 
@@ -287,7 +322,37 @@ Only `protocol/tun/inbound.go` is changed:
          t.logger.Trace("creating stack")
 ```
 
-The patch does not change route matching, Shadowsocks, sing-tun, or `isLocalSource`. It contains no delay or retry loop.
+This patch does not change route matching, Shadowsocks, sing-tun, or `isLocalSource`. It contains no delay or retry loop.
+
+### Patch 2: Codex TLS SNI destination override
+
+On macOS, application DNS requests may be emitted by `mDNSResponder`, so an exact Codex process rule cannot also route the corresponding system DNS socket. A polluted or incorrect local answer can therefore leave Codex connecting to the wrong IP even though its TCP connection correctly enters Outline.
+
+The second patch exposes the existing runtime `RuleActionSniff.OverrideDestination` behavior through JSON. It adds `override_destination` to `RouteActionSniff` in `option/rule_action.go` and copies that value into the runtime action in `route/rule/rule_action.go`:
+
+```diff
+ type RouteActionSniff struct {
+-    Sniffer badoption.Listable[string] `json:"sniffer,omitempty"`
+-    Timeout badoption.Duration         `json:"timeout,omitempty"`
++    Sniffer             badoption.Listable[string] `json:"sniffer,omitempty"`
++    Timeout             badoption.Duration         `json:"timeout,omitempty"`
++    OverrideDestination bool                       `json:"override_destination,omitempty"`
+ }
+
+ sniffAction := &RuleActionSniff{
+-    SnifferNames: action.SniffOptions.Sniffer,
+-    Timeout:      time.Duration(action.SniffOptions.Timeout),
++    SnifferNames:        action.SniffOptions.Sniffer,
++    Timeout:             time.Duration(action.SniffOptions.Timeout),
++    OverrideDestination: action.SniffOptions.OverrideDestination,
+ }
+```
+
+The default remains `false`, so stock sniff rules keep their existing behavior. SeparateProxy enables it only for exact Codex executable TCP/443 traffic. When TLS SNI is available, the Shadowsocks request carries the hostname and the Outline server resolves it remotely. If sniffing fails, times out, or finds no SNI, the runtime does not replace the destination and the following Codex route continues with the original destination.
+
+This mechanism does not support connections whose hostname is hidden by ECH, TLS ClientHello messages without SNI, or non-TLS protocols. It does not add local DNS, DNS hijacking, static domain mappings, or a global sniff rule. `route/route.go`, the TLS sniffer, metadata structures, Shadowsocks, and the DNS subsystem remain unchanged.
+
+The patch-level Go tests cover the default value, explicit `true`, explicit `false`, and preservation of existing `sniffer` and `timeout` fields.
 
 Build the patched binary from the exact source tag using the repository's own default build metadata:
 
@@ -319,5 +384,5 @@ The scripts do not perform IP lookups, connectivity checks, or Chrome automation
 ## Acceptance condition
 
 ```text
-Chrome uses Outline, and other Mac applications remain direct.
+Selected Chrome and Codex traffic use Outline, and unmatched Mac processes remain direct.
 ```

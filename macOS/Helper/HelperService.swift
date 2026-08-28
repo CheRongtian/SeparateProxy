@@ -31,16 +31,38 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
     func startProxy(
         accessKey: String,
         chromeBundlePath: String,
+        codexEnabled: Bool,
         withReply reply: @escaping (NSDictionary) -> Void
     ) {
         queue.async {
             do {
-                let validatedChromePath = try self.validateChromeBundle(at: chromeBundlePath)
+                let validatedChromePath = chromeBundlePath.isEmpty
+                    ? nil
+                    : try self.validateChromeBundle(at: chromeBundlePath)
+                let codexInstallation = try CodexExtensionDiscovery.resolveIfEnabled(
+                    codexEnabled
+                ) {
+                    try CodexExtensionDiscovery
+                        .forConsoleUser()
+                        .discoverActiveInstallation()
+                }
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
-                let configuration = try SingBoxConfigurationBuilder.make(
-                    outline: outline,
-                    chromeBundlePath: validatedChromePath
-                )
+                let configuration: SingBoxConfiguration
+                if codexEnabled {
+                    configuration = try SingBoxConfigurationBuilder.make(
+                        outline: outline,
+                        chromeBundlePath: validatedChromePath,
+                        codexExecutablePath: codexInstallation?.executablePath
+                    )
+                } else {
+                    guard let validatedChromePath else {
+                        throw SingBoxConfigurationError.invalidChromeBundlePath
+                    }
+                    configuration = try SingBoxConfigurationBuilder.make(
+                        outline: outline,
+                        chromeBundlePath: validatedChromePath
+                    )
+                }
                 try self.runtimeStore.writeConfig(configuration.encodedJSON())
                 do {
                     try self.controller.checkConfiguration(

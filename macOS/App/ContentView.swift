@@ -9,6 +9,7 @@ struct ContentView: View {
             Divider()
             keySection
             applicationSection
+            developerToolsSection
             Divider()
             chromeDNSSection
             Divider()
@@ -110,6 +111,33 @@ struct ContentView: View {
         }
     }
 
+    private var developerToolsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Developer Tools")
+                .font(.headline)
+
+            Toggle(isOn: $viewModel.codexIsSelected) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "terminal")
+                        .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Codex")
+                            Spacer()
+                            Text(viewModel.codexTargetState.label)
+                                .font(.caption.bold())
+                                .foregroundStyle(codexStatusColor)
+                        }
+                        Text(viewModel.codexTargetState.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .disabled(!viewModel.codexTargetState.canSelect)
+        }
+    }
+
     private var chromeDNSSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -164,6 +192,15 @@ struct ContentView: View {
         case .modifiedExternally, .unsupported, .error:
             return .orange
         default:
+            return .secondary
+        }
+    }
+
+    private var codexStatusColor: Color {
+        switch viewModel.codexTargetState {
+        case .installed:
+            return .green
+        case .notInstalled, .incompleteInstallation, .unsupportedInstallation:
             return .secondary
         }
     }

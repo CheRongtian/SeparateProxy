@@ -40,6 +40,7 @@ public enum HelperReplyKey {
     func startProxy(
         accessKey: String,
         chromeBundlePath: String,
+        codexEnabled: Bool,
         withReply reply: @escaping (NSDictionary) -> Void
     )
 

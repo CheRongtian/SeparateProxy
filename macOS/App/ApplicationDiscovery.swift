@@ -1,5 +1,7 @@
 import AppKit
+import Darwin
 import Foundation
+import SeparateProxyCore
 
 struct DiscoveredApplication: Identifiable, Equatable {
     let bundleIdentifier: String
@@ -34,5 +36,65 @@ enum ApplicationDiscovery {
             bundleURL: url.standardizedFileURL,
             icon: NSWorkspace.shared.icon(forFile: url.path)
         )
+    }
+}
+
+enum CodexTargetState: Equatable {
+    case installed(CodexInstallation)
+    case notInstalled
+    case incompleteInstallation(String)
+    case unsupportedInstallation(String)
+
+    var installation: CodexInstallation? {
+        guard case let .installed(installation) = self else { return nil }
+        return installation
+    }
+
+    var canSelect: Bool {
+        installation != nil
+    }
+
+    var label: String {
+        switch self {
+        case .installed:
+            return "Installed"
+        case .notInstalled:
+            return "Not Installed"
+        case .incompleteInstallation:
+            return "Incomplete"
+        case .unsupportedInstallation:
+            return "Unsupported"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case let .installed(installation):
+            return "OpenAI VS Code extension \(installation.version)"
+        case .notInstalled:
+            return "The OpenAI Codex VS Code extension is not installed."
+        case let .incompleteInstallation(reason), let .unsupportedInstallation(reason):
+            return reason
+        }
+    }
+}
+
+enum CodexTargetDiscovery {
+    static func discover() -> CodexTargetState {
+        let discovery = CodexExtensionDiscovery(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            expectedOwner: getuid()
+        )
+        do {
+            return .installed(try discovery.discoverActiveInstallation())
+        } catch CodexExtensionDiscoveryError.notInstalled {
+            return .notInstalled
+        } catch let CodexExtensionDiscoveryError.incompleteInstallation(reason) {
+            return .incompleteInstallation(reason)
+        } catch let CodexExtensionDiscoveryError.unsupportedInstallation(reason) {
+            return .unsupportedInstallation(reason)
+        } catch {
+            return .unsupportedInstallation(error.localizedDescription)
+        }
     }
 }

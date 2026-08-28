@@ -30,12 +30,14 @@ final class HelperClient {
     func start(
         accessKey: String,
         chromeBundlePath: String,
+        codexEnabled: Bool,
         completion: @escaping (Result<NSDictionary, Error>) -> Void
     ) {
         withProxy(completion: completion) { proxy in
             proxy.startProxy(
                 accessKey: accessKey,
-                chromeBundlePath: chromeBundlePath
+                chromeBundlePath: chromeBundlePath,
+                codexEnabled: codexEnabled
             ) { completion(.success($0)) }
         }
     }
