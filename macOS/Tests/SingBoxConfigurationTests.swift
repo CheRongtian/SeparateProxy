@@ -12,7 +12,7 @@ final class SingBoxConfigurationTests: XCTestCase {
     private let codexPath = "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
     private let vsCodePluginHelperPath = "/Users/test/Desktop/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)"
 
-    func testBuildsValidatedChromeOnlyRules() throws {
+    func testEmptyProxyWebsiteListGeneratesOnlyChromeIPv6CompatibilityRule() throws {
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
             chromeBundlePath: "/Applications/Google Chrome.app"
@@ -26,32 +26,8 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertTrue(configuration.inbounds[0].autoRoute)
         XCTAssertEqual(configuration.inbounds[0].stack, "system")
 
-        XCTAssertEqual(configuration.route.rules.count, 2)
-        XCTAssertEqual(
-            configuration.route.rules[0].processPathRegex,
-            [#"^/Applications/Google Chrome\.app/"#]
-        )
-        XCTAssertEqual(configuration.route.rules[0].ipVersion, 6)
-        XCTAssertNil(configuration.route.rules[0].network)
-        XCTAssertNil(configuration.route.rules[0].destinationPort)
-        XCTAssertEqual(configuration.route.rules[0].action, "reject")
-        XCTAssertNil(configuration.route.rules[0].sniffer)
-        XCTAssertNil(configuration.route.rules[0].overrideDestination)
-        XCTAssertEqual(configuration.route.rules[0].method, "default")
-        XCTAssertEqual(configuration.route.rules[0].noDrop, true)
-        XCTAssertNil(configuration.route.rules[0].outbound)
-
-        XCTAssertEqual(
-            configuration.route.rules[1].processPathRegex,
-            [#"^/Applications/Google Chrome\.app/"#]
-        )
-        XCTAssertNil(configuration.route.rules[1].ipVersion)
-        XCTAssertNil(configuration.route.rules[1].network)
-        XCTAssertNil(configuration.route.rules[1].destinationPort)
-        XCTAssertEqual(configuration.route.rules[1].action, "route")
-        XCTAssertNil(configuration.route.rules[1].sniffer)
-        XCTAssertNil(configuration.route.rules[1].overrideDestination)
-        XCTAssertEqual(configuration.route.rules[1].outbound, "outline")
+        XCTAssertEqual(configuration.route.rules.count, 1)
+        assertChromeIPv6CompatibilityRule(configuration.route.rules[0])
         XCTAssertEqual(configuration.route.final, "direct")
         XCTAssertTrue(configuration.experimental.trafficAccounting.enabled)
         XCTAssertEqual(
@@ -94,23 +70,27 @@ final class SingBoxConfigurationTests: XCTestCase {
             vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
         )
 
-        XCTAssertEqual(Array(combined.route.rules.prefix(2)), baseline.route.rules)
-        XCTAssertEqual(combined.route.rules.count, 6)
-        assertCodexSniffRule(combined.route.rules[2], codexPath: codexPath)
-        XCTAssertEqual(combined.route.rules[3].action, "route")
-        XCTAssertEqual(combined.route.rules[3].outbound, "outline")
-        XCTAssertEqual(combined.route.rules[3].processPathRegex, combined.route.rules[2].processPathRegex)
-        XCTAssertNil(combined.route.rules[3].network)
-        XCTAssertNil(combined.route.rules[3].destinationPort)
-        XCTAssertNil(combined.route.rules[3].sniffer)
-        XCTAssertNil(combined.route.rules[3].overrideDestination)
-        XCTAssertNil(combined.route.rules[3].ipVersion)
-        XCTAssertNil(combined.route.rules[3].method)
-        XCTAssertNil(combined.route.rules[3].noDrop)
-        XCTAssertNil(combined.route.rules[2].ipVersion)
+        XCTAssertEqual(Array(combined.route.rules.prefix(baseline.route.rules.count)), baseline.route.rules)
+        XCTAssertEqual(combined.route.rules.count, baseline.route.rules.count + 4)
+        let codexStart = baseline.route.rules.count
+        assertCodexSniffRule(combined.route.rules[codexStart], codexPath: codexPath)
+        XCTAssertEqual(combined.route.rules[codexStart + 1].action, "route")
+        XCTAssertEqual(combined.route.rules[codexStart + 1].outbound, "outline")
+        XCTAssertEqual(
+            combined.route.rules[codexStart + 1].processPathRegex,
+            combined.route.rules[codexStart].processPathRegex
+        )
+        XCTAssertNil(combined.route.rules[codexStart + 1].network)
+        XCTAssertNil(combined.route.rules[codexStart + 1].destinationPort)
+        XCTAssertNil(combined.route.rules[codexStart + 1].sniffer)
+        XCTAssertNil(combined.route.rules[codexStart + 1].overrideDestination)
+        XCTAssertNil(combined.route.rules[codexStart + 1].ipVersion)
+        XCTAssertNil(combined.route.rules[codexStart + 1].method)
+        XCTAssertNil(combined.route.rules[codexStart + 1].noDrop)
+        XCTAssertNil(combined.route.rules[codexStart].ipVersion)
         assertVSCodePluginHelperRules(
-            sniffRule: combined.route.rules[4],
-            routeRule: combined.route.rules[5],
+            sniffRule: combined.route.rules[codexStart + 2],
+            routeRule: combined.route.rules[codexStart + 3],
             helperPath: vsCodePluginHelperPath
         )
         XCTAssertEqual(combined.route.final, "direct")
@@ -178,7 +158,16 @@ final class SingBoxConfigurationTests: XCTestCase {
 
         XCTAssertEqual(route["final"] as? String, "direct")
         let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
-        XCTAssertEqual(rules.count, 2)
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules[0]["process_path_regex"] as? [String], [#"^/Applications/Google Chrome\.app/"#])
+        XCTAssertEqual(rules[0]["ip_version"] as? Int, 6)
+        XCTAssertEqual(rules[0]["action"] as? String, "reject")
+        XCTAssertEqual(rules[0]["method"] as? String, "default")
+        XCTAssertEqual(rules[0]["no_drop"] as? Bool, true)
+        XCTAssertNil(rules[0]["domain"])
+        XCTAssertNil(rules[0]["port"])
+        XCTAssertNil(rules[0]["network"])
+        XCTAssertNil(rules[0]["outbound"])
         XCTAssertFalse(rules.contains { $0["action"] as? String == "sniff" })
         XCTAssertFalse(rules.contains { $0["override_destination"] != nil })
         let experimental = try XCTUnwrap(object["experimental"] as? [String: Any])
@@ -306,6 +295,171 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(process.terminationStatus, 0, message)
     }
 
+    func testProxyWebsiteRulesAreExactOrderedAndLeaveChromeDefaultDirect() throws {
+        let hostnames = ["chatgpt.com", "example.com"]
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: hostnames
+        )
+
+        XCTAssertEqual(configuration.route.rules.count, 8)
+        assertChromeIPv6CompatibilityRule(configuration.route.rules[0])
+        assertChromeSniffRule(
+            configuration.route.rules[1],
+            network: "tcp",
+            port: 443,
+            sniffer: "tls"
+        )
+        assertChromeSniffRule(
+            configuration.route.rules[2],
+            network: "udp",
+            port: 443,
+            sniffer: "quic"
+        )
+        assertChromeSniffRule(
+            configuration.route.rules[3],
+            network: "tcp",
+            port: 80,
+            sniffer: "http"
+        )
+        assertChromeDomainRouteRule(
+            configuration.route.rules[4],
+            domains: ["chatgpt.com"],
+            port: 80
+        )
+        assertChromeDomainRouteRule(
+            configuration.route.rules[5],
+            domains: ["chatgpt.com"],
+            port: 443
+        )
+        assertChromeDomainRouteRule(
+            configuration.route.rules[6],
+            domains: ["example.com"],
+            port: 80
+        )
+        assertChromeDomainRouteRule(
+            configuration.route.rules[7],
+            domains: ["example.com"],
+            port: 443
+        )
+        XCTAssertEqual(configuration.route.final, "direct")
+        XCTAssertFalse(configuration.route.rules.contains { rule in
+            rule.action == "route" && rule.domains == nil
+        })
+        XCTAssertEqual(
+            configuration.route.rules.filter { $0.action == "reject" }.count,
+            1
+        )
+        XCTAssertFalse(configuration.route.rules.contains { rule in
+            rule.action == "reject" && rule.domains != nil
+        })
+        XCTAssertFalse(
+            configuration.route.rules
+                .flatMap { $0.domains ?? [] }
+                .contains("ab.chatgpt.com")
+        )
+        XCTAssertFalse(
+            configuration.route.rules
+                .flatMap { $0.domains ?? [] }
+                .contains("evilchatgpt.com")
+        )
+        XCTAssertFalse(
+            configuration.route.rules
+                .flatMap { $0.domains ?? [] }
+                .contains(ChromeInfrastructure.secureDNSHostname)
+        )
+        XCTAssertTrue(
+            configuration.route.rules
+                .filter { $0.action == "route" && $0.destinationPort == 443 }
+                .allSatisfy { $0.network == nil }
+        )
+        XCTAssertEqual(configuration.route.rules.first?.action, "reject")
+    }
+
+    func testChromeAndCodexOnlyAppendUnchangedCodexRulesAfterWebsiteRules() throws {
+        let chromeOnly = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: ["chatgpt.com"]
+        )
+        let combined = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            proxyWebsiteHostnames: ["chatgpt.com"]
+        )
+
+        XCTAssertEqual(
+            Array(combined.route.rules.prefix(chromeOnly.route.rules.count)),
+            chromeOnly.route.rules
+        )
+        XCTAssertEqual(combined.route.rules.count, chromeOnly.route.rules.count + 4)
+        XCTAssertEqual(configurationCodexRules(combined), configurationCodexRules(
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: codexPath,
+                vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
+            )
+        ))
+    }
+
+    func testProxyWebsiteOverrideRulesUseStableNormalizedHostnameOrder() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: ["z.example.com", "a.example.com"]
+        )
+
+        let routeHostnames = configuration.route.rules.dropFirst(4).compactMap { rule in
+            rule.action == "route" ? rule.overrideAddress : nil
+        }
+        XCTAssertEqual(routeHostnames, [
+            "a.example.com",
+            "a.example.com",
+            "z.example.com",
+            "z.example.com",
+        ])
+        XCTAssertEqual(
+            Array(configuration.route.rules.dropFirst(4).map(\.destinationPort)),
+            [80, 443, 80, 443]
+        )
+    }
+
+    func testProxyWebsiteConfigurationPassesBundledSingBoxCheck() throws {
+        let projectURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for hostnames in [["chatgpt.com"], ["chatgpt.com", "example.com"]] {
+            let configuration = try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: "/Applications/Google Chrome.app",
+                proxyWebsiteHostnames: hostnames
+            )
+            let temporaryURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("SeparateProxy-Websites-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            try configuration.encodedJSON().write(to: temporaryURL, options: .atomic)
+
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = projectURL.appendingPathComponent("bin/sing-box")
+            process.arguments = ["check", "-c", temporaryURL.path]
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            process.waitUntilExit()
+            let message = String(
+                data: output.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+            ) ?? ""
+            XCTAssertEqual(process.terminationStatus, 0, message)
+        }
+    }
+
     func testVSCodePluginHelperRegexMatchesOnlyExactPluginHelper() throws {
         let specialHelperPath = "/Users/test/Dev Tools/(Stable)/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)"
         let configuration = try SingBoxConfigurationBuilder.make(
@@ -417,6 +571,68 @@ final class SingBoxConfigurationTests: XCTestCase {
             in: value,
             range: NSRange(value.startIndex..., in: value)
         )
+    }
+
+    private func configurationCodexRules(
+        _ configuration: SingBoxConfiguration
+    ) -> [SingBoxConfiguration.Route.Rule] {
+        Array(configuration.route.rules.suffix(4))
+    }
+
+    private func assertChromeSniffRule(
+        _ rule: SingBoxConfiguration.Route.Rule,
+        network: String,
+        port: UInt16,
+        sniffer: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(
+            rule.processPathRegex,
+            [#"^/Applications/Google Chrome\.app/"#],
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(rule.network, network, file: file, line: line)
+        XCTAssertEqual(rule.destinationPort, port, file: file, line: line)
+        XCTAssertEqual(rule.action, "sniff", file: file, line: line)
+        XCTAssertEqual(rule.sniffer, [sniffer], file: file, line: line)
+        XCTAssertNil(rule.overrideDestination, file: file, line: line)
+        XCTAssertNil(rule.outbound, file: file, line: line)
+    }
+
+    private func assertChromeIPv6CompatibilityRule(
+        _ rule: SingBoxConfiguration.Route.Rule,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(rule.processPathRegex, [#"^/Applications/Google Chrome\.app/"#], file: file, line: line)
+        XCTAssertEqual(rule.ipVersion, 6, file: file, line: line)
+        XCTAssertEqual(rule.action, "reject", file: file, line: line)
+        XCTAssertEqual(rule.method, "default", file: file, line: line)
+        XCTAssertEqual(rule.noDrop, true, file: file, line: line)
+        XCTAssertNil(rule.destinationPort, file: file, line: line)
+        XCTAssertNil(rule.domains, file: file, line: line)
+        XCTAssertNil(rule.network, file: file, line: line)
+        XCTAssertNil(rule.protocolName, file: file, line: line)
+        XCTAssertNil(rule.outbound, file: file, line: line)
+    }
+
+    private func assertChromeDomainRouteRule(
+        _ rule: SingBoxConfiguration.Route.Rule,
+        domains: [String],
+        port: UInt16,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(rule.processPathRegex, [#"^/Applications/Google Chrome\.app/"#], file: file, line: line)
+        XCTAssertNil(rule.ipVersion, file: file, line: line)
+        XCTAssertEqual(rule.destinationPort, port, file: file, line: line)
+        XCTAssertEqual(rule.domains, domains, file: file, line: line)
+        XCTAssertEqual(rule.overrideAddress, domains.first, file: file, line: line)
+        XCTAssertEqual(rule.action, "route", file: file, line: line)
+        XCTAssertEqual(rule.outbound, "outline", file: file, line: line)
+        XCTAssertNil(rule.network, file: file, line: line)
     }
 
     private func assertCodexSniffRule(

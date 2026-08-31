@@ -20,6 +20,9 @@ final class ProxyViewModel: ObservableObject {
             }
         }
     }
+    @Published var proxyWebsiteInput = ""
+    @Published private(set) var proxyWebsiteHostnames: [String]
+    @Published var showChromeECHConfirmation = false
     @Published private(set) var keyIsSaved = false
     @Published private(set) var chrome: DiscoveredApplication?
     @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
@@ -34,12 +37,17 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var chromeDNSState: ChromeDNSIntegrationState = .notConfigured
     @Published private(set) var chromeDNSMessage = "Chrome DNS integration has not been checked."
     @Published private(set) var chromeDNSCanRemove = false
+    @Published private(set) var chromeECHState: ChromeECHRequirementState = .notConfigured
+    @Published private(set) var chromeECHMessage = "Chrome ECH integration has not been checked."
+    @Published private(set) var chromeECHCanRemove = false
 
     private static let chromeSelectionKey = "chrome-is-selected"
     private static let codexSelectionKey = "codex-is-selected"
+    private static let proxyWebsiteHostnamesKey = "proxy-website-hostnames"
     private let keychain = KeychainStore()
     private let helperClient = HelperClient()
     private let chromeDNSManager = ChromeDNSManager()
+    private let chromeECHManager = ChromeECHManager()
     private let helperService = SMAppService.daemon(
         plistName: SeparateProxyIdentifiers.helperPlist
     )
@@ -56,6 +64,12 @@ final class ProxyViewModel: ObservableObject {
             chromeIsSelected = UserDefaults.standard.bool(forKey: Self.chromeSelectionKey)
         }
         codexIsSelected = UserDefaults.standard.bool(forKey: Self.codexSelectionKey)
+        let storedHostnames = UserDefaults.standard.stringArray(
+            forKey: Self.proxyWebsiteHostnamesKey
+        ) ?? []
+        proxyWebsiteHostnames = (
+            try? ProxyWebsiteHostnameNormalizer.validateNormalizedList(storedHostnames)
+        ) ?? []
         refreshLocalState()
     }
 
@@ -130,6 +144,46 @@ final class ProxyViewModel: ObservableObject {
             return "Changed Externally"
         case .unsupported:
             return "Unsupported"
+        case .error:
+            return "Error"
+        }
+    }
+
+    var chromeLegacyDNSStatusLabel: String? {
+        if chromeDNSCanRemove {
+            switch chromeDNSState {
+            case .configured, .chromeRunning, .readyToConfigure, .configuring:
+                return "Legacy DNS: Pending Migration"
+            case .modifiedExternally:
+                return "Legacy DNS: Changed Externally"
+            case .unsupported, .error:
+                return "Legacy DNS: Error"
+            case .notConfigured:
+                return nil
+            }
+        }
+        if chromeDNSState == .modifiedExternally {
+            return "Legacy DNS: Changed Externally"
+        }
+        return nil
+    }
+
+    var chromeECHStateLabel: String {
+        switch chromeECHState {
+        case .notConfigured:
+            return "Not Configured"
+        case .chromeRunning:
+            return "Chrome Is Running"
+        case .configured:
+            return "Disabled"
+        case .satisfiedByManagedPolicy:
+            return "Disabled by Policy"
+        case .modifiedExternally:
+            return "Changed Externally"
+        case .managedEnabled:
+            return "Enabled by Policy"
+        case .unsupported:
+            return "Unavailable"
         case .error:
             return "Error"
         }
@@ -227,6 +281,86 @@ final class ProxyViewModel: ObservableObject {
         beginChromeDNSOperation(.remove)
     }
 
+    func addProxyWebsite() {
+        do {
+            proxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer.adding(
+                proxyWebsiteInput,
+                to: proxyWebsiteHostnames
+            )
+            UserDefaults.standard.set(
+                proxyWebsiteHostnames,
+                forKey: Self.proxyWebsiteHostnamesKey
+            )
+            proxyWebsiteInput = ""
+            message = state == .running
+                ? "Proxy Website changes will apply the next time the proxy starts."
+                : "The Proxy Websites list was updated."
+            refreshChromeECHState()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func removeProxyWebsite(_ hostname: String) {
+        proxyWebsiteHostnames.removeAll { $0 == hostname }
+        UserDefaults.standard.set(
+            proxyWebsiteHostnames,
+            forKey: Self.proxyWebsiteHostnamesKey
+        )
+        message = state == .running
+            ? "Proxy Website changes will apply the next time the proxy starts."
+            : "The Proxy Websites list was updated."
+        refreshChromeECHState()
+    }
+
+    func confirmChromeECHConfigurationAndStart() {
+        showChromeECHConfirmation = false
+        let chromeWasRunning = chromeECHManager.isChromeRunning()
+        guard chromeWasRunning else {
+            configureChromeECHAndStart(reopenChrome: false)
+            return
+        }
+        state = .starting
+        message = "Waiting for Google Chrome to quit safely..."
+        guard chromeECHManager.requestChromeTermination() else {
+            state = .error
+            message = ChromeDNSIntegrationError.chromeDidNotQuit.localizedDescription
+            return
+        }
+        waitForChromeECHExit(
+            operation: .configureAndStart,
+            reopenChrome: true,
+            attemptsRemaining: 80
+        )
+    }
+
+    func removeChromeECHIntegration() {
+        guard state != .running, state != .starting, state != .stopping else {
+            message = "Stop the proxy before restoring the Chrome ECH setting."
+            return
+        }
+        if chromeECHState == .modifiedExternally {
+            performChromeECHRemoval(reopenChrome: false)
+            return
+        }
+        let chromeWasRunning = chromeECHManager.isChromeRunning()
+        guard chromeWasRunning else {
+            performChromeECHRemoval(reopenChrome: false)
+            return
+        }
+        message = "Waiting for Google Chrome to quit safely..."
+        guard chromeECHManager.requestChromeTermination() else {
+            state = .error
+            message = ChromeDNSIntegrationError.chromeDidNotQuit.localizedDescription
+            return
+        }
+        waitForChromeECHExit(
+            operation: .remove,
+            reopenChrome: true,
+            attemptsRemaining: 80
+        )
+    }
+
     func start() {
         guard chromeIsSelected || codexIsSelected else {
             state = .error
@@ -252,6 +386,28 @@ final class ProxyViewModel: ObservableObject {
             }
         }
 
+        if chromeIsSelected, !proxyWebsiteHostnames.isEmpty {
+            do {
+                guard try chromeECHManager.isRequirementSatisfied() else {
+                    showChromeECHConfirmation = true
+                    message = "Proxy Websites requires one-time Chrome ECH configuration."
+                    return
+                }
+            } catch {
+                state = .error
+                message = error.localizedDescription
+                refreshChromeECHState()
+                return
+            }
+            migrateLegacyChromeDNSAndStart(reopenChrome: false)
+            return
+        }
+
+        startProxy(reopenChromeAfterCompletion: false)
+    }
+
+    private func startProxy(reopenChromeAfterCompletion: Bool) {
+
         var accessKey: String?
         do {
             accessKey = try keychain.load()
@@ -264,10 +420,18 @@ final class ProxyViewModel: ObservableObject {
                 accessKey: accessKey,
                 chromeBundlePath: chromeIsSelected ? chrome?.bundleURL.path ?? "" : "",
                 codexEnabled: codexIsSelected,
-                vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : ""
+                vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : "",
+                proxyWebsiteHostnames: chromeIsSelected ? proxyWebsiteHostnames : []
             ) { [weak self] result in
                 Task { @MainActor in
                     self?.applyHelperResult(result)
+                    if reopenChromeAfterCompletion {
+                        do {
+                            try self?.chromeECHManager.reopenChrome()
+                        } catch {
+                            self?.message += " Chrome could not be reopened: \(error.localizedDescription)"
+                        }
+                    }
                 }
             }
         } catch {
@@ -300,7 +464,117 @@ final class ProxyViewModel: ObservableObject {
             vsCodeBundleURL = nil
         }
         refreshChromeDNSState()
+        refreshChromeECHState()
         refreshHelperState()
+    }
+
+    private enum ChromeECHOperation {
+        case configureAndStart
+        case migrateDNSAndStart
+        case remove
+    }
+
+    private func waitForChromeECHExit(
+        operation: ChromeECHOperation,
+        reopenChrome: Bool,
+        attemptsRemaining: Int
+    ) {
+        guard chromeECHManager.isChromeRunning() else {
+            switch operation {
+            case .configureAndStart:
+                configureChromeECHAndStart(reopenChrome: reopenChrome)
+            case .migrateDNSAndStart:
+                migrateLegacyChromeDNSAndStart(reopenChrome: reopenChrome)
+            case .remove:
+                performChromeECHRemoval(reopenChrome: reopenChrome)
+            }
+            return
+        }
+        guard attemptsRemaining > 0 else {
+            state = .error
+            message = ChromeDNSIntegrationError.chromeDidNotQuit.localizedDescription
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.waitForChromeECHExit(
+                operation: operation,
+                reopenChrome: reopenChrome,
+                attemptsRemaining: attemptsRemaining - 1
+            )
+        }
+    }
+
+    private func configureChromeECHAndStart(reopenChrome: Bool) {
+        state = .starting
+        message = "Configuring Chrome Website Routing..."
+        do {
+            _ = try chromeDNSManager.migrateLegacyIntegrationForWebsiteRouting()
+            refreshChromeDNSState()
+            try chromeECHManager.configure()
+            refreshChromeECHState()
+            startProxy(reopenChromeAfterCompletion: reopenChrome)
+        } catch {
+            state = .error
+            message = "Chrome Website Routing setup failed: \(error.localizedDescription)"
+            refreshChromeDNSState()
+            refreshChromeECHState()
+            if reopenChrome {
+                try? chromeECHManager.reopenChrome()
+            }
+        }
+    }
+
+    private func migrateLegacyChromeDNSAndStart(reopenChrome: Bool) {
+        state = .starting
+        message = "Checking legacy Chrome DNS integration..."
+        do {
+            _ = try chromeDNSManager.migrateLegacyIntegrationForWebsiteRouting()
+            refreshChromeDNSState()
+            startProxy(reopenChromeAfterCompletion: reopenChrome)
+        } catch ChromeDNSIntegrationError.chromeRunning {
+            message = "Waiting for Google Chrome to quit safely for legacy DNS migration..."
+            guard chromeDNSManager.requestChromeTermination() else {
+                state = .error
+                message = ChromeDNSIntegrationError.chromeDidNotQuit.localizedDescription
+                return
+            }
+            waitForChromeECHExit(
+                operation: .migrateDNSAndStart,
+                reopenChrome: true,
+                attemptsRemaining: 80
+            )
+        } catch {
+            state = .error
+            message = "Chrome DNS migration failed: \(error.localizedDescription)"
+            refreshChromeDNSState()
+            if reopenChrome {
+                try? chromeDNSManager.reopenChrome()
+            }
+        }
+    }
+
+    private func performChromeECHRemoval(reopenChrome: Bool) {
+        do {
+            switch try chromeECHManager.removeIntegration() {
+            case .removed:
+                message = "The original Chrome ECH preference was restored."
+            case .settingsChangedExternally:
+                message = "Chrome ECH settings changed externally. SeparateProxy did not overwrite them."
+            case .notConfigured:
+                message = "No SeparateProxy Chrome ECH integration record was found."
+            }
+            refreshChromeECHState()
+            if reopenChrome {
+                try chromeECHManager.reopenChrome()
+            }
+        } catch {
+            state = .error
+            message = error.localizedDescription
+            refreshChromeECHState()
+            if reopenChrome {
+                try? chromeECHManager.reopenChrome()
+            }
+        }
     }
 
     private enum ChromeDNSOperation {
@@ -398,19 +672,42 @@ final class ProxyViewModel: ObservableObject {
         chromeDNSCanRemove = chromeDNSManager.hasRestorableIntegration()
         switch chromeDNSState {
         case .notConfigured:
-            chromeDNSMessage = "Chrome DNS integration is not configured."
+            chromeDNSMessage = "No legacy SeparateProxy DNS configuration requires migration."
         case .chromeRunning:
-            chromeDNSMessage = "Quit Google Chrome to configure its DNS integration safely."
+            chromeDNSMessage = chromeDNSCanRemove
+                ? "Legacy SeparateProxy DNS configuration will be restored on the next Website Routing Start."
+                : "No legacy SeparateProxy DNS configuration requires migration."
         case .readyToConfigure:
-            chromeDNSMessage = "Chrome is ready for one-time DNS integration setup."
+            chromeDNSMessage = "No legacy SeparateProxy DNS configuration requires migration."
         case .configuring:
             break
         case .configured:
-            chromeDNSMessage = Self.chromeDNSSafetyMessage
+            chromeDNSMessage = "Legacy SeparateProxy DNS configuration will be restored on the next Website Routing Start."
         case .modifiedExternally:
-            chromeDNSMessage = "Chrome DNS settings changed externally. SeparateProxy will not overwrite them."
+            chromeDNSMessage = "Legacy Chrome DNS settings changed externally. SeparateProxy will not overwrite them."
         case let .unsupported(reason), let .error(reason):
             chromeDNSMessage = reason
+        }
+    }
+
+    private func refreshChromeECHState() {
+        chromeECHState = chromeECHManager.requirementState()
+        chromeECHCanRemove = chromeECHManager.hasRestorableIntegration()
+        switch chromeECHState {
+        case .notConfigured:
+            chromeECHMessage = "Encrypted ClientHello must be disabled before Proxy Websites can start."
+        case .chromeRunning:
+            chromeECHMessage = "Chrome must quit before SeparateProxy can disable Encrypted ClientHello."
+        case .configured:
+            chromeECHMessage = "Encrypted ClientHello is disabled for Chrome Website Routing."
+        case .satisfiedByManagedPolicy:
+            chromeECHMessage = "A managed Chrome policy disables Encrypted ClientHello."
+        case .modifiedExternally:
+            chromeECHMessage = "Chrome ECH settings changed externally. SeparateProxy will not overwrite them."
+        case .managedEnabled:
+            chromeECHMessage = ChromeECHIntegrationError.managedPolicyEnablesECH.localizedDescription
+        case let .unsupported(reason), let .error(reason):
+            chromeECHMessage = reason
         }
     }
 

@@ -156,7 +156,8 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
 public enum SingBoxConfigurationBuilder {
     public static func make(
         outline: OutlineAccessKey,
-        chromeBundlePath: String
+        chromeBundlePath: String,
+        proxyWebsiteHostnames: [String] = []
     ) throws -> SingBoxConfiguration {
         guard chromeBundlePath.hasPrefix("/"),
               chromeBundlePath.hasSuffix(".app"),
@@ -170,6 +171,8 @@ public enum SingBoxConfigurationBuilder {
         let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
             .replacingOccurrences(of: #"\/"#, with: "/")
         let chromeRegex = "^\(escapedPath)/"
+        let normalizedWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
+            .validateNormalizedList(proxyWebsiteHostnames)
 
         return SingBoxConfiguration(
             log: .init(level: "info", timestamp: true),
@@ -202,24 +205,10 @@ public enum SingBoxConfigurationBuilder {
             ],
             route: .init(
                 autoDetectInterface: true,
-                rules: [
-                    .init(
-                        processPathRegex: [chromeRegex],
-                        ipVersion: 6,
-                        action: "reject",
-                        method: "default",
-                        noDrop: true,
-                        outbound: nil
-                    ),
-                    .init(
-                        processPathRegex: [chromeRegex],
-                        ipVersion: nil,
-                        action: "route",
-                        method: nil,
-                        noDrop: nil,
-                        outbound: "outline"
-                    )
-                ],
+                rules: makeChromeRules(
+                    chromeRegex: chromeRegex,
+                    proxyWebsiteHostnames: normalizedWebsiteHostnames
+                ),
                 final: "direct"
             ),
             experimental: trafficAccountingConfiguration
@@ -230,7 +219,8 @@ public enum SingBoxConfigurationBuilder {
         outline: OutlineAccessKey,
         chromeBundlePath: String?,
         codexExecutablePath: String?,
-        vsCodePluginHelperExecutablePath: String?
+        vsCodePluginHelperExecutablePath: String?,
+        proxyWebsiteHostnames: [String] = []
     ) throws -> SingBoxConfiguration {
         guard chromeBundlePath != nil || codexExecutablePath != nil else {
             throw SingBoxConfigurationError.noTargetsSelected
@@ -242,7 +232,8 @@ public enum SingBoxConfigurationBuilder {
         if let chromeBundlePath {
             let chromeConfiguration = try make(
                 outline: outline,
-                chromeBundlePath: chromeBundlePath
+                chromeBundlePath: chromeBundlePath,
+                proxyWebsiteHostnames: proxyWebsiteHostnames
             )
             guard let codexExecutablePath else {
                 return chromeConfiguration
@@ -312,6 +303,65 @@ public enum SingBoxConfigurationBuilder {
             socketPath: TrafficAccountingConstants.socketPath
         )
     )
+
+    private static func makeChromeRules(
+        chromeRegex: String,
+        proxyWebsiteHostnames: [String]
+    ) -> [SingBoxConfiguration.Route.Rule] {
+        var rules: [SingBoxConfiguration.Route.Rule] = [
+            .init(
+                processPathRegex: [chromeRegex],
+                ipVersion: 6,
+                action: "reject",
+                method: "default",
+                noDrop: true
+            ),
+        ]
+
+        guard !proxyWebsiteHostnames.isEmpty else {
+            return rules
+        }
+
+        rules.append(contentsOf: [
+            .init(
+                processPathRegex: [chromeRegex],
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"]
+            ),
+            .init(
+                processPathRegex: [chromeRegex],
+                network: "udp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["quic"]
+            ),
+            .init(
+                processPathRegex: [chromeRegex],
+                network: "tcp",
+                destinationPort: 80,
+                action: "sniff",
+                sniffer: ["http"]
+            ),
+        ])
+
+        for hostname in proxyWebsiteHostnames {
+            for port: UInt16 in [80, 443] {
+                rules.append(
+                    .init(
+                        processPathRegex: [chromeRegex],
+                        destinationPort: port,
+                        action: "route",
+                        domains: [hostname],
+                        overrideAddress: hostname,
+                        outbound: "outline"
+                    )
+                )
+            }
+        }
+        return rules
+    }
 
     private static func makeCodexRules(
         executablePath: String,

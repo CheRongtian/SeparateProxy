@@ -238,6 +238,130 @@ final class ChromeDNSManagerTests: XCTestCase {
         )
     }
 
+    func testLegacyMigrationRestoresAbsentPreferencesAndRemovesRecord() throws {
+        try writeFixture([
+            "dns_over_https": ["unrelated_dns_value": "preserve-me"],
+            "other": 42,
+        ])
+        let manager = makeManager()
+        try manager.configure()
+
+        XCTAssertEqual(
+            try manager.migrateLegacyIntegrationForWebsiteRouting(),
+            .restored
+        )
+
+        let root = try readFixture()
+        let dns = try XCTUnwrap(root["dns_over_https"] as? [String: Any])
+        XCTAssertNil(dns["mode"])
+        XCTAssertNil(dns["templates"])
+        XCTAssertNil(dns["automatic_mode_fallback_to_doh"])
+        XCTAssertEqual(dns["unrelated_dns_value"] as? String, "preserve-me")
+        XCTAssertEqual(root["other"] as? Int, 42)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: integrationStateURL.path))
+    }
+
+    func testLegacyMigrationRestoresExactCustomPreferences() throws {
+        let originalDNS: [String: Any] = [
+            "mode": "secure",
+            "templates": "https://resolver.example/dns-query{?dns}",
+            "automatic_mode_fallback_to_doh": true,
+        ]
+        try writeFixture(["dns_over_https": originalDNS])
+        let manager = makeManager()
+        try manager.configure()
+
+        XCTAssertEqual(
+            try manager.migrateLegacyIntegrationForWebsiteRouting(),
+            .restored
+        )
+
+        let dns = try XCTUnwrap(
+            try readFixture()["dns_over_https"] as? [String: Any]
+        )
+        XCTAssertEqual(dns["mode"] as? String, "secure")
+        XCTAssertEqual(
+            dns["templates"] as? String,
+            "https://resolver.example/dns-query{?dns}"
+        )
+        XCTAssertEqual(dns["automatic_mode_fallback_to_doh"] as? Bool, true)
+    }
+
+    func testLegacyMigrationAllowsExternalChangeWithoutOverwritingIt() throws {
+        try writeFixture(["dns_over_https": ["mode": "off"]])
+        let manager = makeManager()
+        try manager.configure()
+
+        var root = try readFixture()
+        var dns = try XCTUnwrap(root["dns_over_https"] as? [String: Any])
+        dns["mode"] = "secure"
+        root["dns_over_https"] = dns
+        try writeFixture(root)
+        let beforeMigration = try Data(contentsOf: localStateURL)
+
+        XCTAssertEqual(
+            try manager.migrateLegacyIntegrationForWebsiteRouting(),
+            .settingsChangedExternally
+        )
+        XCTAssertEqual(try Data(contentsOf: localStateURL), beforeMigration)
+        XCTAssertEqual(manager.integrationState(), .modifiedExternally)
+    }
+
+    func testLegacyMigrationWriteFailureThrowsAndPreservesTargetPreferences() throws {
+        try writeFixture(["dns_over_https": ["mode": "off"]])
+        try makeManager().configure()
+        let beforeMigration = try Data(contentsOf: localStateURL)
+        let failingManager = makeManager(writer: FailingChromeDNSLocalStateWriter())
+
+        XCTAssertThrowsError(
+            try failingManager.migrateLegacyIntegrationForWebsiteRouting()
+        )
+        XCTAssertEqual(try Data(contentsOf: localStateURL), beforeMigration)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: integrationStateURL.path))
+    }
+
+    func testLegacyMigrationUnexpectedSchemaFailsClosed() throws {
+        try writeFixture(["dns_over_https": ["mode": "off"]])
+        let manager = makeManager()
+        try manager.configure()
+        try writeFixture(["dns_over_https": "unexpected"])
+        let beforeMigration = try Data(contentsOf: localStateURL)
+
+        XCTAssertThrowsError(
+            try manager.migrateLegacyIntegrationForWebsiteRouting()
+        )
+        XCTAssertEqual(try Data(contentsOf: localStateURL), beforeMigration)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: integrationStateURL.path))
+    }
+
+    func testLegacyMigrationWithoutRecordIsNoOp() throws {
+        let manager = makeManager()
+
+        XCTAssertEqual(
+            try manager.migrateLegacyIntegrationForWebsiteRouting(),
+            .notNeeded
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localStateURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: integrationStateURL.path))
+    }
+
+    func testLegacyMigrationDoesNotTouchECHBackup() throws {
+        try writeFixture(["dns_over_https": ["mode": "off"]])
+        let manager = makeManager()
+        try manager.configure()
+        let echStateURL = integrationStateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("chrome-ech-integration.json")
+        let echState = Data(#"{"version":1,"sentinel":"preserve-me"}"#.utf8)
+        try echState.write(to: echStateURL)
+
+        XCTAssertEqual(
+            try manager.migrateLegacyIntegrationForWebsiteRouting(),
+            .restored
+        )
+        XCTAssertEqual(try Data(contentsOf: echStateURL), echState)
+    }
+
     private func makeManager(
         writer: ChromeDNSLocalStateWriting = POSIXChromeDNSLocalStateWriter()
     ) -> ChromeDNSManager {

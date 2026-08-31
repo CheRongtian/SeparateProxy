@@ -23,13 +23,26 @@ struct ContentView: View {
         .onDisappear {
             viewModel.trafficPresentationDisappeared()
         }
+        .alert(
+            "Disable Chrome ECH for Website Routing?",
+            isPresented: $viewModel.showChromeECHConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Quit and Configure Chrome") {
+                viewModel.confirmChromeECHConfigurationAndStart()
+            }
+        } message: {
+            Text(
+                "Website Routing needs to see TLS and QUIC hostnames. SeparateProxy will disable Encrypted ClientHello for all Chrome sites. HTTPS content remains encrypted, while hostnames become more visible to the network. The original setting is saved and can be restored later."
+            )
+        }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("SeparateProxy")
                 .font(.largeTitle.bold())
-            Text("Route Google Chrome through Outline while other applications remain direct.")
+            Text("Route selected Chrome websites and developer tools through Outline.")
                 .foregroundStyle(.secondary)
         }
     }
@@ -85,23 +98,83 @@ struct ContentView: View {
                                 Text(chrome.bundleURL.path)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                HStack(spacing: 4) {
-                                    Text("Secure DNS:")
-                                    Text(viewModel.chromeDNSStateLabel)
+                                if let legacyDNSStatus = viewModel.chromeLegacyDNSStatusLabel {
+                                    Text(legacyDNSStatus)
+                                        .font(.caption)
                                         .foregroundStyle(chromeDNSStatusColor)
+                                        .help(viewModel.chromeDNSMessage)
+                                }
+                                HStack(spacing: 4) {
+                                    Text("Website Routing ECH:")
+                                    Text(viewModel.chromeECHStateLabel)
+                                        .foregroundStyle(chromeECHStatusColor)
                                 }
                                 .font(.caption)
-                                .help(viewModel.chromeDNSMessage)
+                                .help(viewModel.chromeECHMessage)
                             }
                         }
                     }
-                    chromeDNSMenu
+                    chromeIntegrationMenu
                 }
+                proxyWebsitesSection
             } else {
                 Label("Google Chrome was not found.", systemImage: "app.dashed")
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var proxyWebsitesSection: some View {
+        DisclosureGroup("Proxy Websites (\(viewModel.proxyWebsiteHostnames.count))") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    TextField(
+                        "https://example.com/path",
+                        text: $viewModel.proxyWebsiteInput
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        viewModel.addProxyWebsite()
+                    }
+                    Button("Add") {
+                        viewModel.addProxyWebsite()
+                    }
+                    .disabled(viewModel.proxyWebsiteInput.isEmpty)
+                }
+
+                if viewModel.proxyWebsiteHostnames.isEmpty {
+                    Text("Chrome remains direct while no Proxy Websites are configured.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(viewModel.proxyWebsiteHostnames, id: \.self) { hostname in
+                                HStack {
+                                    Text("https://\(hostname)")
+                                        .textSelection(.enabled)
+                                    Spacer()
+                                    Button(role: .destructive) {
+                                        viewModel.removeProxyWebsite(hostname)
+                                    } label: {
+                                        Image(systemName: "minus.circle")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("Remove \(hostname)")
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 120)
+                }
+
+                Text("Exact hostnames only. Changes made while running apply on the next Start.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 6)
+        }
+        .font(.callout)
     }
 
     private var statusSection: some View {
@@ -196,28 +269,28 @@ struct ContentView: View {
         .font(.callout.monospacedDigit())
     }
 
-    private var chromeDNSMenu: some View {
+    private var chromeIntegrationMenu: some View {
         Menu {
-            switch viewModel.chromeDNSState {
-            case .notConfigured, .chromeRunning, .readyToConfigure:
-                Button(viewModel.chromeDNSConfigureButtonTitle) {
-                    viewModel.configureChromeDNS()
-                }
-            case .configuring:
-                Button("Updating Secure DNS...") {}
-                    .disabled(true)
-            case .configured:
+            if let legacyDNSStatus = viewModel.chromeLegacyDNSStatusLabel {
+                Text(legacyDNSStatus)
                 if viewModel.chromeDNSCanRemove {
-                    Button(viewModel.chromeDNSRemoveButtonTitle, role: .destructive) {
+                    Button("Restore Original DNS Settings", role: .destructive) {
                         viewModel.removeChromeDNSIntegration()
                     }
                 }
-            case .modifiedExternally, .unsupported, .error:
-                EmptyView()
+                Divider()
+            }
+
+            Text("Website Routing ECH: \(viewModel.chromeECHStateLabel)")
+            if viewModel.chromeECHCanRemove {
+                Button("Restore Original ECH Setting", role: .destructive) {
+                    viewModel.removeChromeECHIntegration()
+                }
+                .disabled(viewModel.state == .running || viewModel.state == .starting)
             }
 
             Divider()
-            Button("Refresh Secure DNS Status") {
+            Button("Refresh Chrome Integration Status") {
                 viewModel.refresh()
             }
         } label: {
@@ -225,14 +298,23 @@ struct ContentView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Secure DNS Actions")
+        .help("Chrome Integration Actions")
     }
 
     private var chromeDNSStatusColor: Color {
         switch viewModel.chromeDNSState {
-        case .configured:
+        case .configured, .configuring, .modifiedExternally, .unsupported, .error:
+            return .orange
+        default:
+            return .secondary
+        }
+    }
+
+    private var chromeECHStatusColor: Color {
+        switch viewModel.chromeECHState {
+        case .configured, .satisfiedByManagedPolicy:
             return .green
-        case .modifiedExternally, .unsupported, .error:
+        case .modifiedExternally, .managedEnabled, .unsupported, .error:
             return .orange
         default:
             return .secondary

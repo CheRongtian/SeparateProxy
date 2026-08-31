@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import SeparateProxyCore
 
 struct StoredPreference<Value: Codable & Equatable>: Codable, Equatable {
     let existed: Bool
@@ -43,6 +44,12 @@ enum ChromeDNSRemovalResult: Equatable {
     case removed
     case settingsChangedExternally
     case notConfigured
+}
+
+enum ChromeDNSLegacyMigrationResult: Equatable {
+    case restored
+    case settingsChangedExternally
+    case notNeeded
 }
 
 enum ChromeDNSIntegrationError: LocalizedError {
@@ -359,16 +366,7 @@ private final class ChromeDNSIntegrationStore {
 }
 
 final class ChromeDNSManager {
-    static let cloudflareTemplates = """
-    {
-       "servers": [ {
-          "endpoints": [ {
-             "ips": [ "1.1.1.1", "1.0.0.1" ]
-          } ],
-          "template": "https://one.one.one.one/dns-query{?dns}"
-       } ]
-    }
-    """
+    static let cloudflareTemplates = ChromeInfrastructure.secureDNSTemplates
 
     private static let modeKey = "mode"
     private static let templatesKey = "templates"
@@ -548,6 +546,17 @@ final class ChromeDNSManager {
         )
         try integrationStore.remove()
         return .removed
+    }
+
+    func migrateLegacyIntegrationForWebsiteRouting() throws -> ChromeDNSLegacyMigrationResult {
+        switch try removeIntegration() {
+        case .removed:
+            return .restored
+        case .settingsChangedExternally:
+            return .settingsChangedExternally
+        case .notConfigured:
+            return .notNeeded
+        }
     }
 
     private struct LocalStateDocument {

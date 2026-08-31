@@ -35,6 +35,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         chromeBundlePath: String,
         codexEnabled: Bool,
         vsCodeBundlePath: String,
+        proxyWebsiteHostnames: [String],
         withReply reply: @escaping (NSDictionary) -> Void
     ) {
         queue.async {
@@ -57,13 +58,16 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                     )
                 }
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
+                let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
+                    .validateNormalizedList(proxyWebsiteHostnames)
                 let configuration: SingBoxConfiguration
                 if codexEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
                         chromeBundlePath: validatedChromePath,
                         codexExecutablePath: codexInstallation?.executablePath,
-                        vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath
+                        vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
+                        proxyWebsiteHostnames: validatedProxyWebsiteHostnames
                     )
                 } else {
                     guard let validatedChromePath else {
@@ -71,7 +75,8 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                     }
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
-                        chromeBundlePath: validatedChromePath
+                        chromeBundlePath: validatedChromePath,
+                        proxyWebsiteHostnames: validatedProxyWebsiteHostnames
                     )
                 }
                 try self.runtimeStore.writeConfig(configuration.encodedJSON())
