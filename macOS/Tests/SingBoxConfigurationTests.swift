@@ -11,6 +11,12 @@ final class SingBoxConfigurationTests: XCTestCase {
     )
     private let codexPath = "/Users/test/.vscode/extensions/openai.chatgpt-1.2.3-darwin-arm64/bin/macos-aarch64/codex"
     private let vsCodePluginHelperPath = "/Users/test/Desktop/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)"
+    private let gitInstallation = AppleGitInstallation(
+        developerDirectoryPath: "/Applications/Developer Tools (Stable).app/Contents/Developer",
+        gitExecutablePath: "/Applications/Developer Tools (Stable).app/Contents/Developer/usr/bin/git",
+        httpsHelperEntryPath: "/Applications/Developer Tools (Stable).app/Contents/Developer/usr/libexec/git-core/git-remote-https",
+        canonicalHTTPHelperPath: "/Applications/Developer Tools (Stable).app/Contents/Developer/usr/libexec/git-core/git-remote-http"
+    )
 
     func testEmptyProxyWebsiteListGeneratesOnlyChromeIPv6CompatibilityRule() throws {
         let configuration = try SingBoxConfigurationBuilder.make(
@@ -94,6 +100,114 @@ final class SingBoxConfigurationTests: XCTestCase {
             helperPath: vsCodePluginHelperPath
         )
         XCTAssertEqual(combined.route.final, "direct")
+    }
+
+    func testGitDisabledIsFieldForFieldEqualToChromeAndCodexBaseline() throws {
+        let baseline = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
+        )
+        let gitDisabled = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: nil
+        )
+
+        XCTAssertEqual(gitDisabled, baseline)
+        XCTAssertEqual(try gitDisabled.encodedJSON(), try baseline.encodedJSON())
+    }
+
+    func testGitEnabledOnlyAppendsTwoRulesAfterExistingChromeAndCodexRules() throws {
+        let baseline = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath
+        )
+        let combined = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation
+        )
+
+        XCTAssertEqual(
+            Array(combined.route.rules.prefix(baseline.route.rules.count)),
+            baseline.route.rules
+        )
+        XCTAssertEqual(combined.route.rules.count, baseline.route.rules.count + 2)
+        assertGitRules(
+            sniffRule: combined.route.rules[baseline.route.rules.count],
+            routeRule: combined.route.rules[baseline.route.rules.count + 1]
+        )
+        XCTAssertEqual(combined.route.final, "direct")
+        XCTAssertEqual(combined.experimental, baseline.experimental)
+    }
+
+    func testGitOnlyConfigurationUsesExactHTTPS443Boundary() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            gitInstallation: gitInstallation
+        )
+
+        XCTAssertEqual(configuration.route.rules.count, 2)
+        assertGitRules(
+            sniffRule: configuration.route.rules[0],
+            routeRule: configuration.route.rules[1]
+        )
+        XCTAssertEqual(configuration.route.final, "direct")
+    }
+
+    func testGitRegexDoesNotMatchExcludedExecutables() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            gitInstallation: gitInstallation
+        )
+        let expressions = try configuration.route.rules[0].processPathRegex.map {
+            try NSRegularExpression(pattern: $0)
+        }
+
+        for excludedPath in [
+            "/usr/bin/ssh",
+            "/opt/homebrew/bin/git-lfs",
+            "/opt/homebrew/bin/gh",
+            "/usr/bin/git",
+            "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+        ] {
+            XCTAssertTrue(expressions.allSatisfy {
+                numberOfMatches($0, in: excludedPath) == 0
+            })
+        }
+    }
+
+    func testInvalidGitHelperPairIsRejected() {
+        let invalid = AppleGitInstallation(
+            developerDirectoryPath: gitInstallation.developerDirectoryPath,
+            gitExecutablePath: gitInstallation.gitExecutablePath,
+            httpsHelperEntryPath: gitInstallation.httpsHelperEntryPath,
+            canonicalHTTPHelperPath: "/tmp/git-remote-http"
+        )
+
+        XCTAssertThrowsError(try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            gitInstallation: invalid
+        )) { error in
+            XCTAssertEqual(error as? SingBoxConfigurationError, .invalidGitHelperPaths)
+        }
     }
 
     func testCodexOnlyConfigurationKeepsFinalDirect() throws {
@@ -282,6 +396,39 @@ final class SingBoxConfigurationTests: XCTestCase {
         let process = Process()
         let output = Pipe()
         process.executableURL = singBoxURL
+        process.arguments = ["check", "-c", temporaryURL.path]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let message = String(
+            data: output.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, message)
+    }
+
+    func testSyntheticChromeCodexAndGitConfigurationPassesBundledSingBoxCheck() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation
+        )
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SeparateProxy-Git-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try configuration.encodedJSON().write(to: temporaryURL, options: .atomic)
+
+        let projectURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = projectURL.appendingPathComponent("bin/sing-box")
         process.arguments = ["check", "-c", temporaryURL.path]
         process.standardOutput = output
         process.standardError = output
@@ -686,6 +833,41 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(routeRule.action, "route", file: file, line: line)
         XCTAssertEqual(routeRule.outbound, "outline", file: file, line: line)
         XCTAssertEqual(routeRule.overrideAddress, "chatgpt.com", file: file, line: line)
+        XCTAssertNil(routeRule.overrideDestination, file: file, line: line)
+    }
+
+    private func assertGitRules(
+        sniffRule: SingBoxConfiguration.Route.Rule,
+        routeRule: SingBoxConfiguration.Route.Rule,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let expectedRegex = [
+            gitInstallation.httpsHelperEntryPath,
+            gitInstallation.canonicalHTTPHelperPath,
+        ].map { path in
+            let escaped = NSRegularExpression.escapedPattern(for: path)
+                .replacingOccurrences(of: #"\/"#, with: "/")
+            return "^\(escaped)$"
+        }
+
+        XCTAssertEqual(sniffRule.processPathRegex, expectedRegex, file: file, line: line)
+        XCTAssertTrue(sniffRule.processPathRegex.allSatisfy { $0.hasSuffix("$") })
+        XCTAssertEqual(sniffRule.network, "tcp", file: file, line: line)
+        XCTAssertEqual(sniffRule.destinationPort, 443, file: file, line: line)
+        XCTAssertEqual(sniffRule.action, "sniff", file: file, line: line)
+        XCTAssertEqual(sniffRule.sniffer, ["tls"], file: file, line: line)
+        XCTAssertEqual(sniffRule.overrideDestination, true, file: file, line: line)
+        XCTAssertNil(sniffRule.protocolName, file: file, line: line)
+        XCTAssertNil(sniffRule.outbound, file: file, line: line)
+
+        XCTAssertEqual(routeRule.processPathRegex, expectedRegex, file: file, line: line)
+        XCTAssertEqual(routeRule.network, "tcp", file: file, line: line)
+        XCTAssertEqual(routeRule.destinationPort, 443, file: file, line: line)
+        XCTAssertEqual(routeRule.action, "route", file: file, line: line)
+        XCTAssertEqual(routeRule.outbound, "outline", file: file, line: line)
+        XCTAssertNil(routeRule.protocolName, file: file, line: line)
+        XCTAssertNil(routeRule.sniffer, file: file, line: line)
         XCTAssertNil(routeRule.overrideDestination, file: file, line: line)
     }
 }

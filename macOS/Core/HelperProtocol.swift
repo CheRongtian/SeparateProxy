@@ -51,6 +51,7 @@ public enum TrafficAccountingReplyKey {
         accessKey: String,
         chromeBundlePath: String,
         codexEnabled: Bool,
+        gitEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
         withReply reply: @escaping (NSDictionary) -> Void

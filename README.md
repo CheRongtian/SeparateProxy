@@ -1,6 +1,6 @@
 # SeparateProxy
 
-SeparateProxy routes user-selected Chrome websites and OpenAI Codex traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
+SeparateProxy routes user-selected Chrome websites, OpenAI Codex traffic, and Apple/Xcode Git HTTPS remote transport through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
 
 ```text
 Configured Chrome websites        -> IPv4 fallback -> hostname recovery -> Outline remote resolution
@@ -8,13 +8,15 @@ Other Chrome IPv4 traffic         -> original destination -> direct
 Chrome IPv6                       -> immediate compatibility reject -> intended IPv4 fallback
 OpenAI Codex extension executable -> Outline
 VS Code Extension Host            -> Outline only for exact chatgpt.com TLS/443
+Apple/Xcode Git HTTPS helper      -> TLS/443 hostname recovery -> Outline
 Every unmatched process           -> direct
 ```
 
-The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and two independently selectable targets:
+The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and three independently selectable targets:
 
 - Google Chrome Website Routing with a user-maintained exact-hostname list;
-- the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route.
+- the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route;
+- active Apple/Xcode Git HTTPS remote transport over TCP/443.
 
 It has not been validated with unrelated Shadowsocks services. It does not proxy Visual Studio Code as a whole.
 
@@ -26,10 +28,11 @@ The macOS app provides:
 - Google Chrome discovery through Launch Services;
 - up to 100 user-configured exact Proxy Website hostnames;
 - active OpenAI Codex VS Code extension discovery through VS Code metadata;
+- active Apple/Xcode Git discovery through the system developer-directory selection;
 - safe migration and conditional restoration of legacy Chrome DNS integration state;
 - conditional Chrome ECH integration for observable website hostnames;
 - Outline access-key storage in the macOS Keychain;
-- independent Chrome and Codex target selection;
+- independent Chrome, Codex, and Git target selection;
 - Start Proxy and Stop Proxy controls;
 - a privileged helper registered with `SMAppService`;
 - mutually authenticated XPC between the app and helper;
@@ -47,9 +50,10 @@ It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, spee
 - administrator approval for the privileged helper;
 - Google Chrome installed and discoverable by Launch Services when Chrome is selected;
 - the active `openai.chatgpt` VS Code extension for `darwin-arm64` when Codex is selected;
+- active Apple/Xcode developer tools with their Git HTTPS helper when Git is selected;
 - a Chrome Local State file when Website Routing must manage ECH or migrate a legacy DNS integration. Opening Chrome once creates this file.
 
-Xcode is not required to run an already built and signed app.
+The full Xcode app is not required to run an already built and signed app. The Git target requires either active Xcode developer tools or active Apple Command Line Tools.
 
 ## Development and build requirements
 
@@ -86,6 +90,7 @@ macOS TUN, stack: system
   |-- remaining Codex traffic -> Outline
   |-- VS Code shared Extension Host TCP/443 -> inspect TLS SNI
   |-- that host + exact chatgpt.com -> restore hostname and use Outline
+  |-- Apple/Xcode Git HTTPS helper TCP/443 -> recover TLS SNI destination -> Outline
   `-- every unmatched process -> direct
 ```
 
@@ -214,6 +219,8 @@ With Chrome and Codex selected and at least one Proxy Website configured, the hi
 
 With an empty Proxy Websites list, Chrome contributes only its IPv6 compatibility reject before the Codex rules; it contributes no TLS, QUIC, HTTP, or per-host website rules. Codex rules are appended field-for-field after the Chrome rules. The Proxy Websites list is never applied to Codex.
 
+When Git is also selected, its two rules are appended after all existing Chrome and Codex rules: exact helper TCP/443 TLS sniffing with destination recovery, followed by exact helper TCP/443 routing to Outline. Existing Chrome and Codex fields and ordering remain unchanged. All unmatched traffic still reaches `final: direct`.
+
 ## Codex target boundary and discovery
 
 The Codex target consists of two narrow paths:
@@ -257,6 +264,68 @@ The runtime config contains the exact path active at Start time and is regenerat
 
 Use the GUI refresh button if installation state changed while the app was open. A running config does not automatically acquire a new extension path.
 
+## Git target boundary and discovery
+
+Git V1 covers the network phase of active Apple/Xcode Git HTTPS remotes over TCP/443. Typical covered operations are:
+
+```text
+git clone https://...
+git fetch
+git pull
+git pull --rebase
+git push
+git ls-remote
+git submodule update with HTTPS/443 submodule URLs
+```
+
+Local operations such as `status`, `add`, `commit`, `rebase`, `merge`, `log`, `diff`, `branch`, `checkout`, and `switch` require no proxy route and continue normally.
+
+The app uses the fixed `/usr/bin/xcode-select -p` system mechanism to show whether the active developer directory contains the expected Apple Git layout. The root helper repeats discovery independently during every Start and treats its result as authoritative. XPC carries only `gitEnabled`; it does not carry a Git path, nested helper path, regex, command, arguments, remote URL, or route JSON.
+
+Within the active developer directory, the helper derives and validates:
+
+```text
+usr/bin/git
+usr/libexec/git-core/git-remote-https
+usr/libexec/git-core/git-remote-http
+```
+
+The supported Apple layout uses `git-remote-https` as a symbolic link to its `git-remote-http` sibling. Darwin process lookup does not provide a project-level guarantee that the reported executable path preserves the entry name, so one `process_path_regex` array contains both validated exact paths, each escaped and anchored with `$`. No directory wildcard is generated.
+
+The generated Git rules are equivalent to:
+
+```json
+[
+  {
+    "process_path_regex": [
+      "^<active-developer-dir>/usr/libexec/git-core/git-remote-https$",
+      "^<active-developer-dir>/usr/libexec/git-core/git-remote-http$"
+    ],
+    "network": "tcp",
+    "port": 443,
+    "action": "sniff",
+    "sniffer": ["tls"],
+    "override_destination": true
+  },
+  {
+    "process_path_regex": [
+      "^<active-developer-dir>/usr/libexec/git-core/git-remote-https$",
+      "^<active-developer-dir>/usr/libexec/git-core/git-remote-http$"
+    ],
+    "network": "tcp",
+    "port": 443,
+    "action": "route",
+    "outbound": "outline"
+  }
+]
+```
+
+The first rule reuses Patch 2. When TLS SNI is available, `override_destination` replaces a locally resolved IP destination with the hostname and retains port 443, allowing the Outline server to resolve the domain. On timeout, missing SNI, or sniff failure, the original destination remains and the second rule still sends it through Outline. That fallback can succeed when local DNS returned the correct IP and can fail when the local destination was wrong.
+
+Git V1 excludes Homebrew Git, SSH remotes, plain HTTP/80, custom HTTPS ports such as 8443, Git LFS, GitHub CLI, arbitrary credential-manager network flows, Terminal, shells, Visual Studio Code, and arbitrary Git child processes. Git LFS uses its own network executable and can remain Direct even when the repository Git transport is proxied. No repository, `.git/config`, remote URL, credential, token, commit history, or SSH key is read for target discovery.
+
+After switching the active developer directory or upgrading Xcode/Command Line Tools, stop and start SeparateProxy so the new sing-box process receives newly discovered exact helper paths. Git selection is the only persisted Git state.
+
 ## Legacy Chrome DNS integration migration
 
 ### Why process routing does not automatically route application DNS
@@ -268,9 +337,11 @@ application
   -> DNS socket
 ```
 
-At process lookup, a system-resolver DNS socket belongs to `/usr/sbin/mDNSResponder`, not the originating application. A Chrome or Codex `process_path_regex` cannot provide strict per-app routing for that socket.
+At process lookup, a system-resolver DNS socket belongs to `/usr/sbin/mDNSResponder`, not the originating application. A Chrome, Codex, or Git-helper process rule cannot claim the originating system-resolver DNS socket.
 
 SeparateProxy avoids proxying all `mDNSResponder`, hijacking all DNS, or changing macOS DNS servers because each would affect unrelated applications.
+
+Native Codex and the Git HTTPS target instead use observable TLS SNI with Patch 2 destination override to restore a hostname before routing through Outline. Outline then performs remote resolution without requiring ownership of the original system DNS socket. Missing SNI, sniff timeout, and non-TLS traffic retain the original destination.
 
 ### Previous Secure DNS design
 
@@ -447,8 +518,8 @@ Do not delete runtime files while the proxy is running.
 - Runtime directories are root-owned `0700`; runtime files and the accounting socket are root-owned `0600`.
 - Directory checks use `lstat`; file operations use directory-relative descriptors, `O_NOFOLLOW`, regular-file/owner checks, and atomic rename.
 - App and helper constrain XPC peers with bundle identifier and Apple Team ID code-signing requirements.
-- The helper canonicalizes and revalidates the Chrome bundle and discovers Codex itself.
-- XPC cannot submit arbitrary regex, route JSON, executable commands, shell commands, or sing-box arguments.
+- The helper canonicalizes and revalidates the Chrome bundle, performs authoritative Codex discovery, and independently discovers and validates Apple/Xcode Git from the active developer directory.
+- XPC submits only the Git selection state; it cannot submit a nested Git helper path, regex, route JSON, Git arguments, executable commands, shell commands, or sing-box arguments.
 - The helper derives bundled sing-box relative to its own executable.
 - Stop validates PID, root UID, and exact command before `SIGTERM`.
 - Helper and legacy scripts never use `pkill` or `killall`.
@@ -489,9 +560,9 @@ open macOS/SeparateProxy.xcodeproj
 3. locate `SeparateProxy.app` in Products;
 4. copy it to `/Applications` and launch that copy;
 5. save the Outline key;
-6. select Chrome, Codex, or both;
-7. expand **Proxy Websites**, paste an HTTPS URL or hostname, and select **Add**;
-8. confirm the one-time browser-wide ECH change when the first Website Routing Start requests it;
+6. select one or more targets: Chrome, Codex, and Git;
+7. if Chrome is selected and Website Routing is wanted, expand **Proxy Websites**, paste an HTTPS URL or hostname, and select **Add**;
+8. if Chrome is selected with a non-empty Proxy Websites list, confirm the one-time browser-wide ECH change when Website Routing first requires it;
 9. select **Enable Helper** when shown;
 10. if **Approval Required** appears, use **Open System Settings** and enable SeparateProxy under **Login Items & Extensions > App Background Activity**;
 11. refresh until idle state is `Stopped`, then use **Start Proxy**.
@@ -515,7 +586,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Proxy Website normalization and helper-side validation, exact Chrome website destination recovery and deterministic ordering, exact Codex matching, Codex discovery/validation, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Proxy Website normalization and helper-side validation, exact Chrome website destination recovery and deterministic ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -571,9 +642,9 @@ The Darwin CLI interface snapshot can precede TUN creation. Patch 1 refreshes in
 
 It does not modify `isLocalSource`, process matchers, sing-tun, or route semantics and contains no sleep/retry loop.
 
-### Patch 2: Codex TLS SNI destination recovery
+### Patch 2: TLS SNI destination recovery
 
-Stock 1.13.19 already has runtime `RuleActionSniff.OverrideDestination` logic, while its JSON option does not expose the boolean.
+Patch 2 was introduced for native Codex and is now also reused by the Apple/Xcode Git HTTPS target. Stock 1.13.19 already has runtime `RuleActionSniff.OverrideDestination` logic, while its JSON option does not expose the boolean.
 
 ```diff
 diff --git a/option/rule_action.go b/option/rule_action.go
@@ -717,9 +788,9 @@ Do not overwrite Homebrew or Cellar. Run the SeparateProxy Xcode tests afterward
 
 ## Troubleshooting and engineering postmortem
 
-The final policy is short. The difficult work is preserving process identity after Darwin TUN startup, aligning DNS and data egress with default-Direct Website Routing, keeping Chrome hostname routing observable, applying an early Chrome-wide IPv6 fallback rule, and recovering Codex TLS destinations without expanding scope.
+The final policy is short. The difficult work is preserving process identity after Darwin TUN startup, aligning DNS and data egress with default-Direct Website Routing, keeping Chrome hostname routing observable, applying an early Chrome-wide IPv6 fallback rule, and recovering Codex and Git TLS destinations without expanding scope.
 
-Git contains only three coarse project stages. Intermediate investigation and rollback history is not fully represented there. Evidence labels below reflect current source, retained logs, and the provided engineering investigation record.
+Git history contains only a small number of coarse project stages and does not preserve the full intermediate investigation and rollback history. Evidence labels below reflect current source, retained logs, and the provided engineering investigation record.
 
 ### Interpreting diagnostic evidence
 
@@ -728,6 +799,7 @@ Git contains only three coarse project stages. Intermediate investigation and ro
 - Regex matches in isolation: syntax is suitable; the running config may still differ.
 - `outbound/shadowsocks[outline]`: local routing selected Outline; remote connection success is unproven.
 - Codex Outline outbound to `hostname:443`: strong Patch 2 destination-recovery evidence.
+- Apple/Xcode Git helper Outline outbound to `hostname:443`: strong Patch 2 destination-recovery evidence.
 - UI `Running`: last helper reply; not continuous liveness proof.
 - Expected rules in the current on-disk `runtime/config.json`: disk-config evidence only; it does not prove that the running sing-box process loaded that file version.
 - A successful Start reply that returns an already-running recorded PID: process-presence evidence; it does not prove that newly written configuration was loaded.
@@ -744,7 +816,9 @@ Startup sleep, retry loops, and removing the local-source guard were rejected. W
 
 ### Architecture limitation: system DNS loses originating-app identity
 
-System DNS is commonly emitted by `mDNSResponder`. Process rules for Chrome or Codex cannot claim those sockets. Proxying `mDNSResponder`, hijacking DNS globally, or toggling system DNS was rejected because unrelated applications would be affected.
+System DNS is commonly emitted by `mDNSResponder`. Process rules for Chrome, Codex, or a Git HTTPS helper cannot claim the originating system-resolver sockets. Proxying `mDNSResponder`, hijacking DNS globally, or toggling system DNS was rejected because unrelated applications would be affected.
+
+Native Codex and the Git HTTPS target therefore use observable TLS SNI with Patch 2 destination override to restore a hostname before the Outline route. This allows Outline-side resolution without attributing the system DNS socket to either process. Missing SNI, sniff timeout, and non-TLS traffic retain the original destination.
 
 ### Historical root cause: whole-Chrome routing did not imply Chrome DNS routing
 
@@ -873,6 +947,18 @@ The app refreshes at launch, after operations, and on manual refresh; it does no
 
 Raw IP points back to the sniff rule, patched field, TCP/443 match, or SNI availability. A correct hostname moves investigation to remote connectivity, Outline server behavior, or application layer.
 
+### Git HTTPS remote fails
+
+1. confirm the Git target is selected;
+2. confirm active Apple/Xcode developer tools are detected;
+3. confirm a new sing-box process was launched after the selection or developer-directory change;
+4. confirm the remote uses `https://` and destination port 443;
+5. find the exact process path ending in `git-remote-https` or canonical `git-remote-http`;
+6. find `outbound/shadowsocks[outline]` for the same flow;
+7. prefer `hostname:443` on that outbound as evidence of TLS SNI destination recovery;
+8. if only a raw IP remains, inspect TLS SNI sniffing, Patch 2, and the local DNS destination;
+9. treat SSH, Git LFS, GitHub CLI, plain HTTP, and custom ports as outside Git V1.
+
 ### UI says Running but behavior is inconsistent
 
 1. press refresh;
@@ -924,6 +1010,32 @@ outbound/shadowsocks[outline]: outbound connection to chatgpt.com:443
 
 The literal word `sniff` is unnecessary. A hostname in the Codex Outline outbound line is stronger evidence of destination recovery. Redact logs before sharing.
 
+### Git HTTPS
+
+The smallest read-only remote check is:
+
+```bash
+git ls-remote origin HEAD
+```
+
+It reads the remote HEAD and does not commit, push, merge, rebase, or modify the working tree. It may still update Git's internal remote-access metadata, so it should be treated as a minimal read-only remote verification rather than a zero-write guarantee.
+
+Runtime verification in the tested environment observed:
+
+```text
+SeparateProxy running with Git selected
+-> git ls-remote origin HEAD succeeded and returned the remote HEAD
+
+SeparateProxy stopped
+-> the same command failed to connect to github.com:443
+```
+
+This runtime-verified A/B shows that Apple/Xcode Git HTTPS remote transport worked through SeparateProxy in the tested environment. It does not establish push authentication, Git LFS, GitHub CLI, SSH, every Git feature, every GitHub service, or every HTTPS Git provider.
+
+A GitHub HTTPS remote was used because the local Direct path could not connect to `github.com:443` in the tested environment. GitHub is not hardcoded into the routing policy; selection remains exact validated Apple/Xcode Git HTTPS helper traffic over TCP/443.
+
+Strong same-flow log evidence, when retained, is an exact `git-remote-https` or canonical `git-remote-http` process path followed by an Outline outbound to `hostname:443`. The manual A/B above did not retain same-flow log proof, so it is recorded as behavioral runtime evidence only.
+
 ## Rejected alternatives
 
 - Process lookup: startup sleep, retry loops, or removing the local-source guard.
@@ -941,6 +1053,7 @@ Do not cargo-cult compatibility rules:
 ```text
 Chrome -> early browser-wide IPv6 fallback + exact websites + hostname destination recovery
 Codex  -> exact executable + TLS/443 SNI recovery
+Git    -> exact Apple/Xcode HTTPS helper + TLS/443 SNI recovery
 ```
 
 Every new workaround requires a specific symptom, evidence, and narrow target scope. Keep the Chrome IPv6 compatibility behavior scoped to Chrome. Avoid all-app IPv6 rejection, global sniff override, all-app DNS interception, whole-VS-Code routing, hardcoded service addresses/extension versions, startup sleeps, and broad process termination.
@@ -962,6 +1075,9 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - Codex recovery cannot handle ECH-hidden, no-SNI, non-TLS, or sniff-timeout destinations.
 - Shared Extension Host TLS/443 ClientHello is inspected for SNI; only exact `chatgpt.com` is rewritten and routed. Another extension using that same host and domain shares the route.
 - Codex updates require VS Code restart and SeparateProxy Stop/Start.
+- Git V1 supports only active Apple/Xcode Git HTTPS remotes over TCP/443. Homebrew Git, SSH, Git LFS, GitHub CLI, plain HTTP, custom HTTPS ports, and credential-manager network flows are outside its scope.
+- Git TLS sniff failure preserves and proxies the original destination IP; hostname recovery cannot correct a wrong local destination when SNI is unavailable.
+- Switching the active developer directory or upgrading developer tools requires a complete SeparateProxy Stop/Start before new exact helper paths take effect.
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.
 - Helper identifier changes require explicit old-registration cleanup.
@@ -993,6 +1109,7 @@ Differences from SwiftUI:
 
 - fixed `/Applications/Google Chrome.app` regex;
 - no Codex discovery/routing;
+- no Git discovery/routing;
 - no Chrome DNS Integration management;
 - repo-local config remains after Stop;
 - PID is under `/private/tmp` and exact command is validated;
@@ -1005,6 +1122,7 @@ Configured exact Chrome websites use Outline after the Chrome IPv4 compatibility
 Other Chrome IPv4 connections and every unmatched Mac process remain direct.
 Chrome IPv6 is intentionally rejected before hostname routing so Chrome can retry over IPv4.
 Selected Codex integration traffic uses Outline within its documented exact-process boundaries.
+Selected Apple/Xcode Git HTTPS/443 remote transport uses Outline within its documented exact-helper boundary.
 ```
 
-Unmatched includes Visual Studio Code itself, Git, Homebrew, integrated-terminal commands, `codex-code-mode-host`, unrelated extension processes, and `Code Helper (Plugin)` traffic except for the documented exact `chatgpt.com` TLS TCP/443 route. The whole Code Helper is neither proxied nor treated as one independent application target.
+Unmatched includes Visual Studio Code itself, Homebrew Git, SSH Git, Git LFS, GitHub CLI, local Git commands, integrated-terminal commands, `codex-code-mode-host`, unrelated extension processes, and `Code Helper (Plugin)` traffic except for the documented exact `chatgpt.com` TLS TCP/443 route. The whole Code Helper is neither proxied nor treated as one independent application target.

@@ -34,6 +34,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         accessKey: String,
         chromeBundlePath: String,
         codexEnabled: Bool,
+        gitEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
         withReply reply: @escaping (NSDictionary) -> Void
@@ -57,16 +58,22 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         atPath: vsCodeBundlePath
                     )
                 }
+                let gitInstallation = try AppleGitDiscovery.resolveIfEnabled(
+                    gitEnabled
+                ) {
+                    try AppleGitDiscovery().discoverActiveInstallation()
+                }
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
                 let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
                     .validateNormalizedList(proxyWebsiteHostnames)
                 let configuration: SingBoxConfiguration
-                if codexEnabled {
+                if codexEnabled || gitEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
                         chromeBundlePath: validatedChromePath,
                         codexExecutablePath: codexInstallation?.executablePath,
                         vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
+                        gitInstallation: gitInstallation,
                         proxyWebsiteHostnames: validatedProxyWebsiteHostnames
                     )
                 } else {

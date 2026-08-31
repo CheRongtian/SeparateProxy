@@ -139,3 +139,48 @@ enum CodexTargetDiscovery {
         }
     }
 }
+
+enum GitTargetState: Equatable {
+    case installed(AppleGitInstallation)
+    case notFound
+    case unsupported(String)
+
+    var canSelect: Bool {
+        guard case .installed = self else { return false }
+        return true
+    }
+
+    var label: String {
+        switch self {
+        case .installed:
+            return "Installed"
+        case .notFound:
+            return "Not Found"
+        case .unsupported:
+            return "Unsupported"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .installed:
+            return "HTTPS remotes"
+        case .notFound:
+            return "Apple/Xcode Git was not found in the active developer directory."
+        case let .unsupported(reason):
+            return reason
+        }
+    }
+}
+
+enum GitTargetDiscovery {
+    static func discover() -> GitTargetState {
+        do {
+            return .installed(try AppleGitDiscovery().discoverActiveInstallation())
+        } catch AppleGitDiscoveryError.notInstalled {
+            return .notFound
+        } catch {
+            return .unsupported(error.localizedDescription)
+        }
+    }
+}

@@ -137,6 +137,7 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
     case invalidChromeBundlePath
     case invalidCodexExecutablePath
     case invalidVSCodePluginHelperExecutablePath
+    case invalidGitHelperPaths
     case noTargetsSelected
 
     public var errorDescription: String? {
@@ -147,6 +148,8 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
             return "The Codex executable path is invalid."
         case .invalidVSCodePluginHelperExecutablePath:
             return "The Visual Studio Code Plugin Helper executable path is invalid."
+        case .invalidGitHelperPaths:
+            return "The Git HTTPS helper paths are invalid."
         case .noTargetsSelected:
             return "Select at least one proxy target."
         }
@@ -220,13 +223,25 @@ public enum SingBoxConfigurationBuilder {
         chromeBundlePath: String?,
         codexExecutablePath: String?,
         vsCodePluginHelperExecutablePath: String?,
+        gitInstallation: AppleGitInstallation? = nil,
         proxyWebsiteHostnames: [String] = []
     ) throws -> SingBoxConfiguration {
-        guard chromeBundlePath != nil || codexExecutablePath != nil else {
+        guard chromeBundlePath != nil || codexExecutablePath != nil || gitInstallation != nil else {
             throw SingBoxConfigurationError.noTargetsSelected
         }
         guard (codexExecutablePath == nil) == (vsCodePluginHelperExecutablePath == nil) else {
             throw SingBoxConfigurationError.invalidVSCodePluginHelperExecutablePath
+        }
+
+        var additionalRules: [SingBoxConfiguration.Route.Rule] = []
+        if let codexExecutablePath {
+            additionalRules += try makeCodexRules(
+                executablePath: codexExecutablePath,
+                vsCodePluginHelperExecutablePath: vsCodePluginHelperExecutablePath!
+            )
+        }
+        if let gitInstallation {
+            additionalRules += try makeGitRules(installation: gitInstallation)
         }
 
         if let chromeBundlePath {
@@ -235,30 +250,22 @@ public enum SingBoxConfigurationBuilder {
                 chromeBundlePath: chromeBundlePath,
                 proxyWebsiteHostnames: proxyWebsiteHostnames
             )
-            guard let codexExecutablePath else {
+            guard !additionalRules.isEmpty else {
                 return chromeConfiguration
             }
-            let codexRules = try makeCodexRules(
-                executablePath: codexExecutablePath,
-                vsCodePluginHelperExecutablePath: vsCodePluginHelperExecutablePath!
-            )
             return SingBoxConfiguration(
                 log: chromeConfiguration.log,
                 inbounds: chromeConfiguration.inbounds,
                 outbounds: chromeConfiguration.outbounds,
                 route: .init(
                     autoDetectInterface: chromeConfiguration.route.autoDetectInterface,
-                    rules: chromeConfiguration.route.rules + codexRules,
+                    rules: chromeConfiguration.route.rules + additionalRules,
                     final: chromeConfiguration.route.final
                 ),
                 experimental: chromeConfiguration.experimental
             )
         }
 
-        let codexRules = try makeCodexRules(
-            executablePath: codexExecutablePath!,
-            vsCodePluginHelperExecutablePath: vsCodePluginHelperExecutablePath!
-        )
         return SingBoxConfiguration(
             log: .init(level: "info", timestamp: true),
             inbounds: [
@@ -290,7 +297,7 @@ public enum SingBoxConfigurationBuilder {
             ],
             route: .init(
                 autoDetectInterface: true,
-                rules: codexRules,
+                rules: additionalRules,
                 final: "direct"
             ),
             experimental: trafficAccountingConfiguration
@@ -421,6 +428,49 @@ public enum SingBoxConfigurationBuilder {
                 protocolName: "tls",
                 domains: ["chatgpt.com"],
                 overrideAddress: "chatgpt.com",
+                outbound: "outline"
+            ),
+        ]
+    }
+
+    private static func makeGitRules(
+        installation: AppleGitInstallation
+    ) throws -> [SingBoxConfiguration.Route.Rule] {
+        let entryURL = URL(fileURLWithPath: installation.httpsHelperEntryPath)
+            .standardizedFileURL
+        let canonicalURL = URL(fileURLWithPath: installation.canonicalHTTPHelperPath)
+            .standardizedFileURL
+        guard installation.httpsHelperEntryPath.hasPrefix("/"),
+              installation.canonicalHTTPHelperPath.hasPrefix("/"),
+              entryURL.lastPathComponent == "git-remote-https",
+              canonicalURL.lastPathComponent == "git-remote-http",
+              entryURL.deletingLastPathComponent() == canonicalURL.deletingLastPathComponent(),
+              !installation.httpsHelperEntryPath.contains("\n"),
+              !installation.httpsHelperEntryPath.contains("\0"),
+              !installation.canonicalHTTPHelperPath.contains("\n"),
+              !installation.canonicalHTTPHelperPath.contains("\0") else {
+            throw SingBoxConfigurationError.invalidGitHelperPaths
+        }
+
+        let processPathRegex = [entryURL.path, canonicalURL.path].map { path in
+            let escapedPath = NSRegularExpression.escapedPattern(for: path)
+                .replacingOccurrences(of: #"\/"#, with: "/")
+            return "^\(escapedPath)$"
+        }
+        return [
+            .init(
+                processPathRegex: processPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"],
+                overrideDestination: true
+            ),
+            .init(
+                processPathRegex: processPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "route",
                 outbound: "outline"
             ),
         ]

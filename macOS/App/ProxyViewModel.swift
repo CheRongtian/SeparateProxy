@@ -20,12 +20,18 @@ final class ProxyViewModel: ObservableObject {
             }
         }
     }
+    @Published var gitIsSelected: Bool {
+        didSet {
+            UserDefaults.standard.set(gitIsSelected, forKey: Self.gitSelectionKey)
+        }
+    }
     @Published var proxyWebsiteInput = ""
     @Published private(set) var proxyWebsiteHostnames: [String]
     @Published var showChromeECHConfirmation = false
     @Published private(set) var keyIsSaved = false
     @Published private(set) var chrome: DiscoveredApplication?
     @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
+    @Published private(set) var gitTargetState: GitTargetState = .notFound
     @Published private(set) var vsCodeBundleURL: URL?
     @Published private(set) var state: ProxyState = .helperNotInstalled {
         didSet {
@@ -43,6 +49,7 @@ final class ProxyViewModel: ObservableObject {
 
     private static let chromeSelectionKey = "chrome-is-selected"
     private static let codexSelectionKey = "codex-is-selected"
+    private static let gitSelectionKey = "git-is-selected"
     private static let proxyWebsiteHostnamesKey = "proxy-website-hostnames"
     private let keychain = KeychainStore()
     private let helperClient = HelperClient()
@@ -64,6 +71,7 @@ final class ProxyViewModel: ObservableObject {
             chromeIsSelected = UserDefaults.standard.bool(forKey: Self.chromeSelectionKey)
         }
         codexIsSelected = UserDefaults.standard.bool(forKey: Self.codexSelectionKey)
+        gitIsSelected = UserDefaults.standard.bool(forKey: Self.gitSelectionKey)
         let storedHostnames = UserDefaults.standard.stringArray(
             forKey: Self.proxyWebsiteHostnamesKey
         ) ?? []
@@ -75,9 +83,10 @@ final class ProxyViewModel: ObservableObject {
 
     var canStart: Bool {
         let canRetry = state == .stopped || state == .error
-        let hasSelection = chromeIsSelected || codexIsSelected
+        let hasSelection = chromeIsSelected || codexIsSelected || gitIsSelected
         let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
             && (!codexIsSelected || (codexTargetState.canSelect && vsCodeBundleURL != nil))
+            && (!gitIsSelected || gitTargetState.canSelect)
         return canRetry
             && helperService.status == .enabled
             && keyIsSaved
@@ -362,7 +371,7 @@ final class ProxyViewModel: ObservableObject {
     }
 
     func start() {
-        guard chromeIsSelected || codexIsSelected else {
+        guard chromeIsSelected || codexIsSelected || gitIsSelected else {
             state = .error
             message = SingBoxConfigurationError.noTargetsSelected.localizedDescription
             return
@@ -384,6 +393,11 @@ final class ProxyViewModel: ObservableObject {
                 message = "Visual Studio Code is unavailable."
                 return
             }
+        }
+        if gitIsSelected, !gitTargetState.canSelect {
+            state = .error
+            message = "Apple/Xcode Git HTTPS support is unavailable."
+            return
         }
 
         if chromeIsSelected, !proxyWebsiteHostnames.isEmpty {
@@ -420,6 +434,7 @@ final class ProxyViewModel: ObservableObject {
                 accessKey: accessKey,
                 chromeBundlePath: chromeIsSelected ? chrome?.bundleURL.path ?? "" : "",
                 codexEnabled: codexIsSelected,
+                gitEnabled: gitIsSelected,
                 vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : "",
                 proxyWebsiteHostnames: chromeIsSelected ? proxyWebsiteHostnames : []
             ) { [weak self] result in
@@ -455,8 +470,12 @@ final class ProxyViewModel: ObservableObject {
         keyIsSaved = keychain.containsKey()
         chrome = ApplicationDiscovery.findGoogleChrome()
         codexTargetState = CodexTargetDiscovery.discover()
+        gitTargetState = GitTargetDiscovery.discover()
         if !codexTargetState.canSelect {
             codexIsSelected = false
+        }
+        if !gitTargetState.canSelect {
+            gitIsSelected = false
         }
         if codexIsSelected, codexTargetState.canSelect {
             vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()

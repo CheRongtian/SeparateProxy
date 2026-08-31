@@ -223,6 +223,26 @@ struct ContentView: View {
                 }
             }
             .disabled(!viewModel.codexTargetState.canSelect)
+
+            Toggle(isOn: $viewModel.gitIsSelected) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Git")
+                            Spacer()
+                            Text(viewModel.gitTargetState.label)
+                                .font(.caption.bold())
+                                .foregroundStyle(gitStatusColor)
+                        }
+                        Text(viewModel.gitTargetState.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .disabled(!viewModel.gitTargetState.canSelect)
         }
     }
 
@@ -326,6 +346,15 @@ struct ContentView: View {
         case .installed:
             return .green
         case .notInstalled, .incompleteInstallation, .unsupportedInstallation:
+            return .secondary
+        }
+    }
+
+    private var gitStatusColor: Color {
+        switch viewModel.gitTargetState {
+        case .installed:
+            return .green
+        case .notFound, .unsupported:
             return .secondary
         }
     }
