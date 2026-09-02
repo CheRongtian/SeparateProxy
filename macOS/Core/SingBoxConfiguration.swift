@@ -138,6 +138,7 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
     case invalidCodexExecutablePath
     case invalidVSCodePluginHelperExecutablePath
     case invalidGitHelperPaths
+    case invalidDockerHubInstallation
     case noTargetsSelected
 
     public var errorDescription: String? {
@@ -150,6 +151,8 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
             return "The Visual Studio Code Plugin Helper executable path is invalid."
         case .invalidGitHelperPaths:
             return "The Git HTTPS helper paths are invalid."
+        case .invalidDockerHubInstallation:
+            return "The Docker Hub executable paths are invalid."
         case .noTargetsSelected:
             return "Select at least one proxy target."
         }
@@ -224,9 +227,13 @@ public enum SingBoxConfigurationBuilder {
         codexExecutablePath: String?,
         vsCodePluginHelperExecutablePath: String?,
         gitInstallation: AppleGitInstallation? = nil,
+        dockerHubInstallation: DockerHubInstallation? = nil,
         proxyWebsiteHostnames: [String] = []
     ) throws -> SingBoxConfiguration {
-        guard chromeBundlePath != nil || codexExecutablePath != nil || gitInstallation != nil else {
+        guard chromeBundlePath != nil
+            || codexExecutablePath != nil
+            || gitInstallation != nil
+            || dockerHubInstallation != nil else {
             throw SingBoxConfigurationError.noTargetsSelected
         }
         guard (codexExecutablePath == nil) == (vsCodePluginHelperExecutablePath == nil) else {
@@ -242,6 +249,9 @@ public enum SingBoxConfigurationBuilder {
         }
         if let gitInstallation {
             additionalRules += try makeGitRules(installation: gitInstallation)
+        }
+        if let dockerHubInstallation {
+            additionalRules += try makeDockerHubRules(installation: dockerHubInstallation)
         }
 
         if let chromeBundlePath {
@@ -474,5 +484,94 @@ public enum SingBoxConfigurationBuilder {
                 outbound: "outline"
             ),
         ]
+    }
+
+    private static func makeDockerHubRules(
+        installation: DockerHubInstallation
+    ) throws -> [SingBoxConfiguration.Route.Rule] {
+        let bundleURL = URL(fileURLWithPath: installation.applicationBundlePath)
+            .standardizedFileURL
+        let backendURL = URL(fileURLWithPath: installation.backendExecutablePath)
+            .standardizedFileURL
+        let cliURL = URL(fileURLWithPath: installation.cliExecutablePath)
+            .standardizedFileURL
+        let expectedBackendURL = bundleURL
+            .appendingPathComponent(DockerHubDiscovery.backendExecutableRelativePath)
+            .standardizedFileURL
+        let expectedCLIURL = bundleURL
+            .appendingPathComponent(DockerHubDiscovery.cliExecutableRelativePath)
+            .standardizedFileURL
+
+        guard installation.applicationBundlePath.hasPrefix("/"),
+              bundleURL.pathExtension == "app",
+              backendURL == expectedBackendURL,
+              cliURL == expectedCLIURL,
+              backendURL.lastPathComponent == "com.docker.backend",
+              cliURL.lastPathComponent == "docker",
+              !installation.applicationBundlePath.contains("\n"),
+              !installation.applicationBundlePath.contains("\0"),
+              !installation.backendExecutablePath.contains("\n"),
+              !installation.backendExecutablePath.contains("\0"),
+              !installation.cliExecutablePath.contains("\n"),
+              !installation.cliExecutablePath.contains("\0") else {
+            throw SingBoxConfigurationError.invalidDockerHubInstallation
+        }
+
+        let backendRegex = [exactProcessPathRegex(for: backendURL.path)]
+        let cliRegex = [exactProcessPathRegex(for: cliURL.path)]
+        var rules: [SingBoxConfiguration.Route.Rule] = [
+            .init(
+                processPathRegex: backendRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"]
+            ),
+        ]
+        for hostname in DockerHubRoutePolicy.backendHostnames {
+            rules.append(
+                .init(
+                    processPathRegex: backendRegex,
+                    network: "tcp",
+                    destinationPort: 443,
+                    action: "route",
+                    protocolName: "tls",
+                    domains: [hostname],
+                    overrideAddress: hostname,
+                    outbound: "outline"
+                )
+            )
+        }
+
+        rules.append(
+            .init(
+                processPathRegex: cliRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"]
+            )
+        )
+        for hostname in DockerHubRoutePolicy.cliHostnames {
+            rules.append(
+                .init(
+                    processPathRegex: cliRegex,
+                    network: "tcp",
+                    destinationPort: 443,
+                    action: "route",
+                    protocolName: "tls",
+                    domains: [hostname],
+                    overrideAddress: hostname,
+                    outbound: "outline"
+                )
+            )
+        }
+        return rules
+    }
+
+    private static func exactProcessPathRegex(for path: String) -> String {
+        let escapedPath = NSRegularExpression.escapedPattern(for: path)
+            .replacingOccurrences(of: #"\/"#, with: "/")
+        return "^\(escapedPath)$"
     }
 }

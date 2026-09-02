@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SeparateProxyCore
 
@@ -35,6 +36,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         chromeBundlePath: String,
         codexEnabled: Bool,
         gitEnabled: Bool,
+        dockerEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
         withReply reply: @escaping (NSDictionary) -> Void
@@ -63,17 +65,27 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                 ) {
                     try AppleGitDiscovery().discoverActiveInstallation()
                 }
+                let dockerHubInstallation = try DockerHubDiscovery.resolveIfEnabled(
+                    dockerEnabled
+                ) {
+                    try DockerHubDiscovery {
+                        NSWorkspace.shared.urlForApplication(
+                            withBundleIdentifier: DockerHubDiscovery.applicationBundleIdentifier
+                        )
+                    }.discoverActiveInstallation()
+                }
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
                 let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
                     .validateNormalizedList(proxyWebsiteHostnames)
                 let configuration: SingBoxConfiguration
-                if codexEnabled || gitEnabled {
+                if codexEnabled || gitEnabled || dockerEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
                         chromeBundlePath: validatedChromePath,
                         codexExecutablePath: codexInstallation?.executablePath,
                         vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
                         gitInstallation: gitInstallation,
+                        dockerHubInstallation: dockerHubInstallation,
                         proxyWebsiteHostnames: validatedProxyWebsiteHostnames
                     )
                 } else {

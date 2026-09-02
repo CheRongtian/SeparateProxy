@@ -184,3 +184,54 @@ enum GitTargetDiscovery {
         }
     }
 }
+
+enum DockerHubTargetState: Equatable {
+    case installed(DockerHubInstallation)
+    case notFound
+    case unsupported(String)
+
+    var canSelect: Bool {
+        guard case .installed = self else { return false }
+        return true
+    }
+
+    var label: String {
+        switch self {
+        case .installed:
+            return "Installed"
+        case .notFound:
+            return "Not Found"
+        case .unsupported:
+            return "Unsupported"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .installed:
+            return "Registry HTTPS"
+        case .notFound:
+            return "Docker Desktop was not found."
+        case let .unsupported(reason):
+            return reason
+        }
+    }
+}
+
+enum DockerHubTargetDiscovery {
+    @MainActor
+    static func discover() -> DockerHubTargetState {
+        let discovery = DockerHubDiscovery {
+            NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: DockerHubDiscovery.applicationBundleIdentifier
+            )
+        }
+        do {
+            return .installed(try discovery.discoverActiveInstallation())
+        } catch DockerHubDiscoveryError.notInstalled {
+            return .notFound
+        } catch {
+            return .unsupported(error.localizedDescription)
+        }
+    }
+}

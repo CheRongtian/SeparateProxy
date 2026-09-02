@@ -243,6 +243,31 @@ struct ContentView: View {
                 }
             }
             .disabled(!viewModel.gitTargetState.canSelect)
+
+            Toggle(isOn: $viewModel.dockerHubIsSelected) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "shippingbox")
+                        .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Docker Hub")
+                            Spacer()
+                            Text(viewModel.dockerHubTargetState.label)
+                                .font(.caption.bold())
+                                .foregroundStyle(dockerHubStatusColor)
+                        }
+                        Text(viewModel.dockerHubTargetState.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if viewModel.dockerHubIsSelected {
+                            Text("Browser sign-in uses Chrome Website Routing.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .disabled(!viewModel.dockerHubTargetState.canSelect)
         }
     }
 
@@ -352,6 +377,15 @@ struct ContentView: View {
 
     private var gitStatusColor: Color {
         switch viewModel.gitTargetState {
+        case .installed:
+            return .green
+        case .notFound, .unsupported:
+            return .secondary
+        }
+    }
+
+    private var dockerHubStatusColor: Color {
+        switch viewModel.dockerHubTargetState {
         case .installed:
             return .green
         case .notFound, .unsupported:

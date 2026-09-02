@@ -1,6 +1,6 @@
 # SeparateProxy
 
-SeparateProxy routes user-selected Chrome websites, OpenAI Codex traffic, and Apple/Xcode Git HTTPS remote transport through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
+SeparateProxy routes user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, and narrowly scoped Docker Hub HTTPS traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
 
 ```text
 Configured Chrome websites        -> IPv4 fallback -> hostname recovery -> Outline remote resolution
@@ -9,14 +9,17 @@ Chrome IPv6                       -> immediate compatibility reject -> intended 
 OpenAI Codex extension executable -> Outline
 VS Code Extension Host            -> Outline only for exact chatgpt.com TLS/443
 Apple/Xcode Git HTTPS helper      -> TLS/443 hostname recovery -> Outline
+Docker backend + exact Hub host   -> TLS/443 hostname recovery -> Outline
+Bundled Docker CLI + login host   -> TLS/443 hostname recovery -> Outline
 Every unmatched process           -> direct
 ```
 
-The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and three independently selectable targets:
+The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and four independently selectable targets:
 
 - Google Chrome Website Routing with a user-maintained exact-hostname list;
 - the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route;
-- active Apple/Xcode Git HTTPS remote transport over TCP/443.
+- active Apple/Xcode Git HTTPS remote transport over TCP/443;
+- Docker Hub first-party registry, authentication, and control HTTPS on exact hostnames.
 
 It has not been validated with unrelated Shadowsocks services. It does not proxy Visual Studio Code as a whole.
 
@@ -29,10 +32,11 @@ The macOS app provides:
 - up to 100 user-configured exact Proxy Website hostnames;
 - active OpenAI Codex VS Code extension discovery through VS Code metadata;
 - active Apple/Xcode Git discovery through the system developer-directory selection;
+- Docker Desktop discovery through Launch Services with fixed bundled backend and CLI executables;
 - safe migration and conditional restoration of legacy Chrome DNS integration state;
 - conditional Chrome ECH integration for observable website hostnames;
 - Outline access-key storage in the macOS Keychain;
-- independent Chrome, Codex, and Git target selection;
+- independent Chrome, Codex, Git, and Docker Hub target selection;
 - Start Proxy and Stop Proxy controls;
 - a privileged helper registered with `SMAppService`;
 - mutually authenticated XPC between the app and helper;
@@ -40,7 +44,7 @@ The macOS app provides:
 - session-level Proxy and Direct traffic counters exposed through a root-only read-only path;
 - root-owned runtime configuration, log, and PID files.
 
-It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, speed tests, automatic node selection, global DNS interception, arbitrary application rules, child-process inheritance, custom TUN/Shadowsocks implementations, or whole-VS-Code routing.
+It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, speed tests, automatic node selection, global DNS interception, arbitrary application rules, child-process inheritance, custom TUN/Shadowsocks implementations, whole-VS-Code routing, whole-container networking, or arbitrary registry routing.
 
 ## Runtime requirements
 
@@ -51,6 +55,7 @@ It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, spee
 - Google Chrome installed and discoverable by Launch Services when Chrome is selected;
 - the active `openai.chatgpt` VS Code extension for `darwin-arm64` when Codex is selected;
 - active Apple/Xcode developer tools with their Git HTTPS helper when Git is selected;
+- Docker Desktop with its validated bundled backend and CLI when Docker Hub is selected;
 - a Chrome Local State file when Website Routing must manage ECH or migrate a legacy DNS integration. Opening Chrome once creates this file.
 
 The full Xcode app is not required to run an already built and signed app. The Git target requires either active Xcode developer tools or active Apple Command Line Tools.
@@ -91,6 +96,10 @@ macOS TUN, stack: system
   |-- VS Code shared Extension Host TCP/443 -> inspect TLS SNI
   |-- that host + exact chatgpt.com -> restore hostname and use Outline
   |-- Apple/Xcode Git HTTPS helper TCP/443 -> recover TLS SNI destination -> Outline
+  |-- Docker backend TCP/443 -> inspect TLS SNI
+  |-- backend + exact Docker Hub infrastructure hostname -> restore hostname -> Outline
+  |-- bundled Docker CLI TCP/443 -> inspect TLS SNI
+  |-- CLI + exact Docker login hostname -> restore hostname -> Outline
   `-- every unmatched process -> direct
 ```
 
@@ -219,7 +228,7 @@ With Chrome and Codex selected and at least one Proxy Website configured, the hi
 
 With an empty Proxy Websites list, Chrome contributes only its IPv6 compatibility reject before the Codex rules; it contributes no TLS, QUIC, HTTP, or per-host website rules. Codex rules are appended field-for-field after the Chrome rules. The Proxy Websites list is never applied to Codex.
 
-When Git is also selected, its two rules are appended after all existing Chrome and Codex rules: exact helper TCP/443 TLS sniffing with destination recovery, followed by exact helper TCP/443 routing to Outline. Existing Chrome and Codex fields and ordering remain unchanged. All unmatched traffic still reaches `final: direct`.
+When Git is also selected, its two rules are appended after all existing Chrome and Codex rules: exact helper TCP/443 TLS sniffing with destination recovery, followed by exact helper TCP/443 routing to Outline. Docker Hub rules, when selected, follow Git without changing any earlier rule. Existing Chrome, Codex, and Git fields and ordering remain unchanged. All unmatched traffic still reaches `final: direct`.
 
 ## Codex target boundary and discovery
 
@@ -326,6 +335,89 @@ Git V1 excludes Homebrew Git, SSH remotes, plain HTTP/80, custom HTTPS ports suc
 
 After switching the active developer directory or upgrading Xcode/Command Line Tools, stop and start SeparateProxy so the new sing-box process receives newly discovered exact helper paths. Git selection is the only persisted Git state.
 
+## Docker Hub target boundary and discovery
+
+Docker Hub V1 covers first-party Docker Hub HTTPS infrastructure. It has three process boundaries:
+
+```text
+validated com.docker.backend
+  + exact Docker Hub infrastructure hostname
+  + TCP/443
+  -> Outline
+
+validated bundled Docker CLI
+  + exact Docker device-login hostname
+  + TCP/443
+  -> Outline
+
+browser authorization
+  -> existing Chrome Website Routing, configured manually by the user
+```
+
+The intended coverage includes Docker Hub image pull/push transport, registry authentication, covered Docker Desktop Hub/control requests, and the Docker CLI device-code request, polling, and automatic personal-access-token network path. This scope is based on official documentation, static source investigation, retained local process evidence, generated-config tests, and an offline sing-box config check. Docker Hub routing through SeparateProxy has not yet received a manual runtime A/B verification.
+
+The app discovers bundle identifier `com.docker.docker` through Launch Services for display. During every selected Start, the helper repeats discovery independently and treats the result as authoritative. It canonicalizes and verifies the Docker application bundle, then derives only these fixed relative executables:
+
+```text
+Contents/MacOS/com.docker.backend
+Contents/Resources/bin/docker
+```
+
+Each executable must remain inside the validated bundle, be a regular non-symlink file with executable permission, and have the expected owner and basename. The helper does not trust the shell `PATH`, `/usr/local/bin/docker`, or a path supplied over XPC. Darwin process lookup obtains the executable vnode path, so V1 matches only the validated canonical bundled CLI path even when a shell entry is a symlink into Docker.app. The local Docker installation did not pass strict code-signature verification reliably, so signature metadata is supporting evidence and not a mandatory acceptance condition.
+
+For the backend, the generated rules are one exact-process TLS sniff rule followed by six exact-hostname route rules:
+
+```json
+{
+  "process_path_regex": ["^<escaped Docker.app path>/Contents/MacOS/com\\.docker\\.backend$"],
+  "network": "tcp",
+  "port": 443,
+  "action": "sniff",
+  "sniffer": ["tls"]
+}
+```
+
+The exact backend hostnames are:
+
+```text
+registry-1.docker.io
+auth.docker.io
+production.cloudfront.docker.com
+login.docker.com
+hub.docker.com
+api.docker.com
+```
+
+Each matching route has this shape:
+
+```json
+{
+  "process_path_regex": ["^<escaped exact backend path>$"],
+  "network": "tcp",
+  "port": 443,
+  "protocol": "tls",
+  "domain": ["registry-1.docker.io"],
+  "action": "route",
+  "override_address": "registry-1.docker.io",
+  "outbound": "outline"
+}
+```
+
+The bundled CLI gets the same non-rewriting TLS sniff shape and only two exact route hostnames:
+
+```text
+login.docker.com
+hub.docker.com
+```
+
+`override_address` restores a matched TLS hostname so Outline performs remote resolution. The initial sniff rules deliberately omit `override_destination`: backend and CLI traffic with an unmatched hostname retains its original destination and reaches `final: direct`. Backend TCP/443 sniffing can observe TLS ClientHello metadata for unrelated container traffic handled by the shared backend, although unmatched traffic is neither rewritten nor proxied.
+
+Docker Hub V1 generates no whole-backend route, whole-CLI route, UDP rule, IPv6 workaround, wildcard, suffix rule, plain-HTTP rule, custom-port rule, or third-party registry rule. It excludes `auth.docker.com`, `cdn.auth0.com`, GHCR, Quay, Harbor, private registries, arbitrary Docker CLI traffic, and arbitrary container egress.
+
+Browser authorization remains separate. For a browser device-login flow, add `login.docker.com` manually to Chrome **Proxy Websites**. Google authorization may additionally require `accounts.google.com`; add further exact hostnames only when the observed browser flow requires them. Selecting Docker Hub never modifies Chrome websites, DNS, or ECH settings.
+
+Only the `docker-is-selected` Boolean is persisted. Docker paths, versions, hostnames, registries, accounts, tokens, and credentials are not persisted. XPC adds only `dockerEnabled`; the helper derives all paths and rules itself. A selected target with an invalid or incomplete Docker installation fails before configuration is written or sing-box is started.
+
 ## Legacy Chrome DNS integration migration
 
 ### Why process routing does not automatically route application DNS
@@ -337,11 +429,11 @@ application
   -> DNS socket
 ```
 
-At process lookup, a system-resolver DNS socket belongs to `/usr/sbin/mDNSResponder`, not the originating application. A Chrome, Codex, or Git-helper process rule cannot claim the originating system-resolver DNS socket.
+At process lookup, a system-resolver DNS socket belongs to `/usr/sbin/mDNSResponder`, not the originating application. A Chrome, Codex, Git-helper, or Docker process rule cannot claim the originating system-resolver DNS socket.
 
 SeparateProxy avoids proxying all `mDNSResponder`, hijacking all DNS, or changing macOS DNS servers because each would affect unrelated applications.
 
-Native Codex and the Git HTTPS target instead use observable TLS SNI with Patch 2 destination override to restore a hostname before routing through Outline. Outline then performs remote resolution without requiring ownership of the original system DNS socket. Missing SNI, sniff timeout, and non-TLS traffic retain the original destination.
+Native Codex and the Git HTTPS target use observable TLS SNI with Patch 2 destination override to restore a hostname before routing through Outline. Docker Hub uses exact SNI matching plus per-domain `override_address` for the same remote-resolution goal while preserving unmatched shared-process destinations. Missing SNI, sniff timeout, and non-TLS traffic retain the original destination.
 
 ### Previous Secure DNS design
 
@@ -518,8 +610,8 @@ Do not delete runtime files while the proxy is running.
 - Runtime directories are root-owned `0700`; runtime files and the accounting socket are root-owned `0600`.
 - Directory checks use `lstat`; file operations use directory-relative descriptors, `O_NOFOLLOW`, regular-file/owner checks, and atomic rename.
 - App and helper constrain XPC peers with bundle identifier and Apple Team ID code-signing requirements.
-- The helper canonicalizes and revalidates the Chrome bundle, performs authoritative Codex discovery, and independently discovers and validates Apple/Xcode Git from the active developer directory.
-- XPC submits only the Git selection state; it cannot submit a nested Git helper path, regex, route JSON, Git arguments, executable commands, shell commands, or sing-box arguments.
+- The helper canonicalizes and revalidates the Chrome bundle, performs authoritative Codex discovery, independently discovers and validates Apple/Xcode Git from the active developer directory, and independently validates Docker.app plus its fixed bundled backend and CLI.
+- XPC submits only fixed target selections and the existing Chrome/VS Code candidate bundle paths. It cannot submit a Docker nested executable path, Git helper path, regex, route JSON, target hostname list, executable command, shell command, or sing-box argument.
 - The helper derives bundled sing-box relative to its own executable.
 - Stop validates PID, root UID, and exact command before `SIGTERM`.
 - Helper and legacy scripts never use `pkill` or `killall`.
@@ -560,7 +652,7 @@ open macOS/SeparateProxy.xcodeproj
 3. locate `SeparateProxy.app` in Products;
 4. copy it to `/Applications` and launch that copy;
 5. save the Outline key;
-6. select one or more targets: Chrome, Codex, and Git;
+6. select one or more targets: Chrome, Codex, Git, and Docker Hub;
 7. if Chrome is selected and Website Routing is wanted, expand **Proxy Websites**, paste an HTTPS URL or hostname, and select **Add**;
 8. if Chrome is selected with a non-empty Proxy Websites list, confirm the one-time browser-wide ECH change when Website Routing first requires it;
 9. select **Enable Helper** when shown;
@@ -586,7 +678,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Proxy Website normalization and helper-side validation, exact Chrome website destination recovery and deterministic ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Proxy Website normalization and helper-side validation, exact Chrome website destination recovery and deterministic ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -644,7 +736,7 @@ It does not modify `isLocalSource`, process matchers, sing-tun, or route semanti
 
 ### Patch 2: TLS SNI destination recovery
 
-Patch 2 was introduced for native Codex and is now also reused by the Apple/Xcode Git HTTPS target. Stock 1.13.19 already has runtime `RuleActionSniff.OverrideDestination` logic, while its JSON option does not expose the boolean.
+Patch 2 was introduced for native Codex and is also reused by the Apple/Xcode Git HTTPS target. Docker Hub uses the same existing hostname-destination mechanism through per-domain `override_address`; it requires no additional sing-box patch. Stock 1.13.19 already has runtime `RuleActionSniff.OverrideDestination` logic, while its JSON option does not expose the boolean.
 
 ```diff
 diff --git a/option/rule_action.go b/option/rule_action.go
@@ -788,7 +880,7 @@ Do not overwrite Homebrew or Cellar. Run the SeparateProxy Xcode tests afterward
 
 ## Troubleshooting and engineering postmortem
 
-The final policy is short. The difficult work is preserving process identity after Darwin TUN startup, aligning DNS and data egress with default-Direct Website Routing, keeping Chrome hostname routing observable, applying an early Chrome-wide IPv6 fallback rule, and recovering Codex and Git TLS destinations without expanding scope.
+The final policy is short. The difficult work is preserving process identity after Darwin TUN startup, aligning DNS and data egress with default-Direct Website Routing, keeping Chrome hostname routing observable, applying an early Chrome-wide IPv6 fallback rule, and recovering narrowly scoped Codex, Git, and Docker Hub TLS destinations without expanding scope.
 
 Git history contains only a small number of coarse project stages and does not preserve the full intermediate investigation and rollback history. Evidence labels below reflect current source, retained logs, and the provided engineering investigation record.
 
@@ -800,6 +892,7 @@ Git history contains only a small number of coarse project stages and does not p
 - `outbound/shadowsocks[outline]`: local routing selected Outline; remote connection success is unproven.
 - Codex Outline outbound to `hostname:443`: strong Patch 2 destination-recovery evidence.
 - Apple/Xcode Git helper Outline outbound to `hostname:443`: strong Patch 2 destination-recovery evidence.
+- Docker backend or bundled CLI Outline outbound to an allowlisted `hostname:443`: strong evidence that exact process, TLS hostname, and per-domain destination recovery all matched; no such runtime evidence is claimed yet.
 - UI `Running`: last helper reply; not continuous liveness proof.
 - Expected rules in the current on-disk `runtime/config.json`: disk-config evidence only; it does not prove that the running sing-box process loaded that file version.
 - A successful Start reply that returns an already-running recorded PID: process-presence evidence; it does not prove that newly written configuration was loaded.
@@ -816,9 +909,9 @@ Startup sleep, retry loops, and removing the local-source guard were rejected. W
 
 ### Architecture limitation: system DNS loses originating-app identity
 
-System DNS is commonly emitted by `mDNSResponder`. Process rules for Chrome, Codex, or a Git HTTPS helper cannot claim the originating system-resolver sockets. Proxying `mDNSResponder`, hijacking DNS globally, or toggling system DNS was rejected because unrelated applications would be affected.
+System DNS is commonly emitted by `mDNSResponder`. Process rules for Chrome, Codex, a Git HTTPS helper, or Docker cannot claim the originating system-resolver sockets. Proxying `mDNSResponder`, hijacking DNS globally, or toggling system DNS was rejected because unrelated applications would be affected.
 
-Native Codex and the Git HTTPS target therefore use observable TLS SNI with Patch 2 destination override to restore a hostname before the Outline route. This allows Outline-side resolution without attributing the system DNS socket to either process. Missing SNI, sniff timeout, and non-TLS traffic retain the original destination.
+Native Codex and the Git HTTPS target therefore use observable TLS SNI with Patch 2 destination override to restore a hostname before the Outline route. Docker Hub uses the same observable SNI and restores only one of its fixed exact hostnames after a domain match. This allows Outline-side resolution without attributing the system DNS socket to the selected process. Missing SNI, sniff timeout, non-TLS traffic, and unmatched Docker hostnames retain the original destination.
 
 ### Historical root cause: whole-Chrome routing did not imply Chrome DNS routing
 
@@ -959,6 +1052,18 @@ Raw IP points back to the sniff rule, patched field, TCP/443 match, or SNI avail
 8. if only a raw IP remains, inspect TLS SNI sniffing, Patch 2, and the local DNS destination;
 9. treat SSH, Git LFS, GitHub CLI, plain HTTP, and custom ports as outside Git V1.
 
+### Docker Hub operation fails
+
+1. confirm **Docker Hub** is selected and shown as installed;
+2. confirm a complete Stop/Start launched a new sing-box process after the selection changed;
+3. find the exact process path ending in `Contents/MacOS/com.docker.backend` or `Contents/Resources/bin/docker`;
+4. confirm the destination is TCP/443 and TLS sniffing recovered one of the documented exact hostnames;
+5. find `outbound/shadowsocks[outline]` to that same hostname;
+6. for browser authorization, maintain `login.docker.com` and any observed OAuth dependencies separately under Chrome **Proxy Websites**;
+7. treat third-party registries, UDP, plain HTTP, custom HTTPS ports, and arbitrary container egress as outside Docker Hub V1.
+
+An unmatched backend or CLI hostname reaching Direct is the intended boundary. A raw IP destination on an unmatched flow does not show that a Docker Hub exact-domain rule failed.
+
 ### UI says Running but behavior is inconsistent
 
 1. press refresh;
@@ -1036,6 +1141,12 @@ A GitHub HTTPS remote was used because the local Direct path could not connect t
 
 Strong same-flow log evidence, when retained, is an exact `git-remote-https` or canonical `git-remote-http` process path followed by an Outline outbound to `hostname:443`. The manual A/B above did not retain same-flow log proof, so it is recorded as behavioral runtime evidence only.
 
+### Docker Hub
+
+Docker Hub routing was not runtime-tested during implementation. A later manual verification should correlate one exact backend or bundled-CLI process path with an Outline outbound to one documented exact hostname. Pull, push, login, and browser authorization cross different process boundaries, so success in one path does not prove the others.
+
+For browser authorization, the Docker Hub target alone is intentionally insufficient. Configure exact login hosts through Chrome Website Routing and evaluate only the hostnames observed in that browser flow. Do not infer whole-container or third-party-registry support from a successful Docker Hub request.
+
 ## Rejected alternatives
 
 - Process lookup: startup sleep, retry loops, or removing the local-source guard.
@@ -1043,6 +1154,7 @@ Strong same-flow log evidence, when retained, is an exact `git-remote-https` or 
 - Chrome Website Routing: whole-Chrome proxy fallback, whole-Chrome UDP rejection, suffix or wildcard expansion, global unknown-SNI rejection, ECH policy installation, browser extensions, PAC, or TLS interception.
 - Chrome IPv6: copying the browser-wide compatibility rule to other targets.
 - Codex: global DNS changes, `mDNSResponder` routing, all-DNS hijack, `/etc/hosts`, fixed IP mappings, broad OpenAI-domain interception, whole-VS-Code or whole-Extension-Host routing, unsupported `codex-code-mode-host`, hardcoded versions, or wildcards over historical versions.
+- Docker Hub: whole-backend routing, whole-CLI routing, all container traffic, Docker proxy-setting integration, third-party registry presets, wildcard/suffix rules, global destination override, UDP routing, automatic Chrome website insertion, or broad OAuth presets.
 
 These options either preserve timing bugs, expand effects to unrelated applications, or rely on brittle static state.
 
@@ -1054,6 +1166,7 @@ Do not cargo-cult compatibility rules:
 Chrome -> early browser-wide IPv6 fallback + exact websites + hostname destination recovery
 Codex  -> exact executable + TLS/443 SNI recovery
 Git    -> exact Apple/Xcode HTTPS helper + TLS/443 SNI recovery
+Docker Hub -> exact bundled backend/CLI + exact TLS/443 hostnames
 ```
 
 Every new workaround requires a specific symptom, evidence, and narrow target scope. Keep the Chrome IPv6 compatibility behavior scoped to Chrome. Avoid all-app IPv6 rejection, global sniff override, all-app DNS interception, whole-VS-Code routing, hardcoded service addresses/extension versions, startup sleeps, and broad process termination.
@@ -1078,6 +1191,10 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - Git V1 supports only active Apple/Xcode Git HTTPS remotes over TCP/443. Homebrew Git, SSH, Git LFS, GitHub CLI, plain HTTP, custom HTTPS ports, and credential-manager network flows are outside its scope.
 - Git TLS sniff failure preserves and proxies the original destination IP; hostname recovery cannot correct a wrong local destination when SNI is unavailable.
 - Switching the active developer directory or upgrading developer tools requires a complete SeparateProxy Stop/Start before new exact helper paths take effect.
+- Docker Hub V1 covers only the six documented backend hostnames and two bundled-CLI login hostnames over TLS TCP/443. It does not cover all container traffic, third-party registries, UDP, plain HTTP, custom HTTPS ports, or arbitrary Docker CLI destinations.
+- Docker backend and CLI hostname classification depends on observable TLS SNI. Missing SNI or an unmatched hostname remains Direct.
+- Docker browser authorization remains a separate Chrome Website Routing concern and may require multiple manually observed exact hostnames.
+- Docker Hub routing has generated-config and offline sing-box validation only; manual runtime A/B evidence has not yet been recorded.
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.
 - Helper identifier changes require explicit old-registration cleanup.
@@ -1110,6 +1227,7 @@ Differences from SwiftUI:
 - fixed `/Applications/Google Chrome.app` regex;
 - no Codex discovery/routing;
 - no Git discovery/routing;
+- no Docker Hub discovery/routing;
 - no Chrome DNS Integration management;
 - repo-local config remains after Stop;
 - PID is under `/private/tmp` and exact command is validated;
@@ -1123,6 +1241,7 @@ Other Chrome IPv4 connections and every unmatched Mac process remain direct.
 Chrome IPv6 is intentionally rejected before hostname routing so Chrome can retry over IPv4.
 Selected Codex integration traffic uses Outline within its documented exact-process boundaries.
 Selected Apple/Xcode Git HTTPS/443 remote transport uses Outline within its documented exact-helper boundary.
+Selected Docker Hub first-party HTTPS traffic uses Outline within its documented exact-process and exact-hostname boundaries.
 ```
 
-Unmatched includes Visual Studio Code itself, Homebrew Git, SSH Git, Git LFS, GitHub CLI, local Git commands, integrated-terminal commands, `codex-code-mode-host`, unrelated extension processes, and `Code Helper (Plugin)` traffic except for the documented exact `chatgpt.com` TLS TCP/443 route. The whole Code Helper is neither proxied nor treated as one independent application target.
+Unmatched includes Visual Studio Code itself, Homebrew Git, SSH Git, Git LFS, GitHub CLI, local Git commands, integrated-terminal commands, `codex-code-mode-host`, unrelated extension processes, `Code Helper (Plugin)` traffic except for the documented exact `chatgpt.com` TLS TCP/443 route, arbitrary Docker backend/CLI hostnames, third-party registries, and ordinary container egress. The whole Code Helper, Docker backend, and Docker CLI are not proxied.

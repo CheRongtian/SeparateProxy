@@ -25,6 +25,14 @@ final class ProxyViewModel: ObservableObject {
             UserDefaults.standard.set(gitIsSelected, forKey: Self.gitSelectionKey)
         }
     }
+    @Published var dockerHubIsSelected: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                dockerHubIsSelected,
+                forKey: Self.dockerHubSelectionKey
+            )
+        }
+    }
     @Published var proxyWebsiteInput = ""
     @Published private(set) var proxyWebsiteHostnames: [String]
     @Published var showChromeECHConfirmation = false
@@ -32,6 +40,7 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var chrome: DiscoveredApplication?
     @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
     @Published private(set) var gitTargetState: GitTargetState = .notFound
+    @Published private(set) var dockerHubTargetState: DockerHubTargetState = .notFound
     @Published private(set) var vsCodeBundleURL: URL?
     @Published private(set) var state: ProxyState = .helperNotInstalled {
         didSet {
@@ -50,6 +59,7 @@ final class ProxyViewModel: ObservableObject {
     private static let chromeSelectionKey = "chrome-is-selected"
     private static let codexSelectionKey = "codex-is-selected"
     private static let gitSelectionKey = "git-is-selected"
+    private static let dockerHubSelectionKey = "docker-is-selected"
     private static let proxyWebsiteHostnamesKey = "proxy-website-hostnames"
     private let keychain = KeychainStore()
     private let helperClient = HelperClient()
@@ -72,6 +82,7 @@ final class ProxyViewModel: ObservableObject {
         }
         codexIsSelected = UserDefaults.standard.bool(forKey: Self.codexSelectionKey)
         gitIsSelected = UserDefaults.standard.bool(forKey: Self.gitSelectionKey)
+        dockerHubIsSelected = UserDefaults.standard.bool(forKey: Self.dockerHubSelectionKey)
         let storedHostnames = UserDefaults.standard.stringArray(
             forKey: Self.proxyWebsiteHostnamesKey
         ) ?? []
@@ -83,10 +94,14 @@ final class ProxyViewModel: ObservableObject {
 
     var canStart: Bool {
         let canRetry = state == .stopped || state == .error
-        let hasSelection = chromeIsSelected || codexIsSelected || gitIsSelected
+        let hasSelection = chromeIsSelected
+            || codexIsSelected
+            || gitIsSelected
+            || dockerHubIsSelected
         let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
             && (!codexIsSelected || (codexTargetState.canSelect && vsCodeBundleURL != nil))
             && (!gitIsSelected || gitTargetState.canSelect)
+            && (!dockerHubIsSelected || dockerHubTargetState.canSelect)
         return canRetry
             && helperService.status == .enabled
             && keyIsSaved
@@ -371,7 +386,7 @@ final class ProxyViewModel: ObservableObject {
     }
 
     func start() {
-        guard chromeIsSelected || codexIsSelected || gitIsSelected else {
+        guard chromeIsSelected || codexIsSelected || gitIsSelected || dockerHubIsSelected else {
             state = .error
             message = SingBoxConfigurationError.noTargetsSelected.localizedDescription
             return
@@ -397,6 +412,11 @@ final class ProxyViewModel: ObservableObject {
         if gitIsSelected, !gitTargetState.canSelect {
             state = .error
             message = "Apple/Xcode Git HTTPS support is unavailable."
+            return
+        }
+        if dockerHubIsSelected, !dockerHubTargetState.canSelect {
+            state = .error
+            message = "Docker Hub support is unavailable."
             return
         }
 
@@ -435,6 +455,7 @@ final class ProxyViewModel: ObservableObject {
                 chromeBundlePath: chromeIsSelected ? chrome?.bundleURL.path ?? "" : "",
                 codexEnabled: codexIsSelected,
                 gitEnabled: gitIsSelected,
+                dockerEnabled: dockerHubIsSelected,
                 vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : "",
                 proxyWebsiteHostnames: chromeIsSelected ? proxyWebsiteHostnames : []
             ) { [weak self] result in
@@ -471,11 +492,15 @@ final class ProxyViewModel: ObservableObject {
         chrome = ApplicationDiscovery.findGoogleChrome()
         codexTargetState = CodexTargetDiscovery.discover()
         gitTargetState = GitTargetDiscovery.discover()
+        dockerHubTargetState = DockerHubTargetDiscovery.discover()
         if !codexTargetState.canSelect {
             codexIsSelected = false
         }
         if !gitTargetState.canSelect {
             gitIsSelected = false
+        }
+        if !dockerHubTargetState.canSelect {
+            dockerHubIsSelected = false
         }
         if codexIsSelected, codexTargetState.canSelect {
             vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()
