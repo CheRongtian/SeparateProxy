@@ -76,7 +76,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                 }
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
                 let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
-                    .validateNormalizedList(proxyWebsiteHostnames)
+                    .validateEffectiveNormalizedList(proxyWebsiteHostnames)
                 let configuration: SingBoxConfiguration
                 if codexEnabled || gitEnabled || dockerEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(

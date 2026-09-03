@@ -32,7 +32,13 @@ final class DockerHubConfigurationTests: XCTestCase {
         )
 
         XCTAssertEqual(disabled, baseline)
-        XCTAssertEqual(try disabled.encodedJSON(), try baseline.encodedJSON())
+        let disabledJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: disabled.encodedJSON()) as? NSDictionary
+        )
+        let baselineJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: baseline.encodedJSON()) as? NSDictionary
+        )
+        XCTAssertEqual(disabledJSON, baselineJSON)
     }
 
     func testDockerHubRulesAppendAfterExistingTargetsWithoutChangingThem() throws {
@@ -54,6 +60,41 @@ final class DockerHubConfigurationTests: XCTestCase {
         XCTAssertEqual(combined.route.rules.count, baseline.route.rules.count + 10)
         XCTAssertEqual(combined.route.final, "direct")
         XCTAssertEqual(combined.experimental, baseline.experimental)
+    }
+
+    func testGoogleWebsiteRoutingDoesNotChangeDockerHubRules() throws {
+        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: ["example.com"],
+            isEnabled: true
+        )
+        let baseline = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: chromePath,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation,
+            proxyWebsiteHostnames: effective
+        )
+        let combined = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: chromePath,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation,
+            dockerHubInstallation: dockerInstallation,
+            proxyWebsiteHostnames: effective
+        )
+        let dockerOnly = try dockerOnlyConfiguration()
+
+        XCTAssertEqual(
+            Array(combined.route.rules.prefix(baseline.route.rules.count)),
+            baseline.route.rules
+        )
+        XCTAssertEqual(
+            Array(combined.route.rules.dropFirst(baseline.route.rules.count)),
+            dockerOnly.route.rules
+        )
+        XCTAssertEqual(combined.route.final, "direct")
     }
 
     func testDockerHubOnlyGeneratesExactBackendAndCLIRules() throws {

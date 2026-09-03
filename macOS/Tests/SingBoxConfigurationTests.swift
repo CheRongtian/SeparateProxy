@@ -575,6 +575,192 @@ final class SingBoxConfigurationTests: XCTestCase {
         )
     }
 
+    func testGoogleDisabledIsFieldForFieldEqualToExistingChromeConfigurations() throws {
+        let emptyBaseline = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app"
+        )
+        let emptyEffective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: [],
+            isEnabled: false
+        )
+        let emptyDisabled = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: emptyEffective
+        )
+        XCTAssertEqual(emptyDisabled, emptyBaseline)
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: emptyDisabled.encodedJSON()) as? NSDictionary,
+            try JSONSerialization.jsonObject(with: emptyBaseline.encodedJSON()) as? NSDictionary
+        )
+
+        let customBaseline = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: ["chatgpt.com"]
+        )
+        let customEffective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: ["chatgpt.com"],
+            isEnabled: false
+        )
+        let customDisabled = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: customEffective
+        )
+        XCTAssertEqual(customDisabled, customBaseline)
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: customDisabled.encodedJSON()) as? NSDictionary,
+            try JSONSerialization.jsonObject(with: customBaseline.encodedJSON()) as? NSDictionary
+        )
+    }
+
+    func testGoogleWebsiteRoutingUsesExistingExactHostnameRuleShape() throws {
+        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: [],
+            isEnabled: true
+        )
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: effective
+        )
+
+        XCTAssertEqual(configuration.route.rules.count, 1 + 3 + (11 * 2))
+        assertChromeIPv6CompatibilityRule(configuration.route.rules[0])
+        assertChromeSniffRule(
+            configuration.route.rules[1],
+            network: "tcp",
+            port: 443,
+            sniffer: "tls"
+        )
+        assertChromeSniffRule(
+            configuration.route.rules[2],
+            network: "udp",
+            port: 443,
+            sniffer: "quic"
+        )
+        assertChromeSniffRule(
+            configuration.route.rules[3],
+            network: "tcp",
+            port: 80,
+            sniffer: "http"
+        )
+
+        for (index, hostname) in effective.enumerated() {
+            let routeStart = 4 + (index * 2)
+            assertChromeDomainRouteRule(
+                configuration.route.rules[routeStart],
+                domains: [hostname],
+                port: 80
+            )
+            assertChromeDomainRouteRule(
+                configuration.route.rules[routeStart + 1],
+                domains: [hostname],
+                port: 443
+            )
+        }
+        XCTAssertEqual(configuration.route.final, "direct")
+
+        let json = try XCTUnwrap(
+            String(data: configuration.encodedJSON(), encoding: .utf8)
+        )
+        XCTAssertFalse(json.contains("domain_suffix"))
+        XCTAssertFalse(json.contains("*.google.com"))
+    }
+
+    func testGoogleAndCustomDuplicateGeneratesOneExactHostnameRulePair() throws {
+        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: ["accounts.google.com"],
+            isEnabled: true
+        )
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: effective
+        )
+        let accountRules = configuration.route.rules.filter {
+            $0.domains == ["accounts.google.com"]
+        }
+
+        XCTAssertEqual(effective.count, 11)
+        XCTAssertEqual(accountRules.count, 2)
+        XCTAssertEqual(accountRules.map(\.destinationPort), [80, 443])
+    }
+
+    func testGoogleWebsiteRulesPrecedeUnchangedCodexAndGitRules() throws {
+        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: ["example.com"],
+            isEnabled: true
+        )
+        let chromeOnly = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: effective
+        )
+        let additionalOnly = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation
+        )
+        let combined = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation,
+            proxyWebsiteHostnames: effective
+        )
+
+        XCTAssertEqual(
+            Array(combined.route.rules.prefix(chromeOnly.route.rules.count)),
+            chromeOnly.route.rules
+        )
+        XCTAssertEqual(
+            Array(combined.route.rules.dropFirst(chromeOnly.route.rules.count)),
+            additionalOnly.route.rules
+        )
+        XCTAssertEqual(combined.route.final, "direct")
+    }
+
+    func testSyntheticGoogleWebsiteConfigurationPassesBundledSingBoxCheck() throws {
+        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: ["example.com"],
+            isEnabled: true
+        )
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: effective
+        )
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SeparateProxy-Google-Websites-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try configuration.encodedJSON().write(to: temporaryURL, options: .atomic)
+
+        let projectURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = projectURL.appendingPathComponent("bin/sing-box")
+        process.arguments = ["check", "-c", temporaryURL.path]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let message = String(
+            data: output.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, message)
+    }
+
     func testProxyWebsiteConfigurationPassesBundledSingBoxCheck() throws {
         let projectURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

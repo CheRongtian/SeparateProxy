@@ -15,6 +15,47 @@ public enum ChromeInfrastructure {
     """
 }
 
+public enum GoogleWebsiteRouting {
+    // The first nine hosts cover core or entry workflows. The final two are
+    // narrowly scoped proactive compatibility candidates; runtime validation
+    // of the complete set remains pending.
+    public static let hostnames = [
+        "google.com",
+        "www.google.com",
+        "drive.google.com",
+        "docs.google.com",
+        "sheets.google.com",
+        "slides.google.com",
+        "drive.usercontent.google.com",
+        "accounts.google.com",
+        "gemini.google.com",
+        "jnn-pa.googleapis.com",
+        "www.googleapis.com",
+    ]
+
+    public static func effectiveHostnames(
+        customHostnames: [String],
+        isEnabled: Bool
+    ) throws -> [String] {
+        let validatedCustomHostnames = try ProxyWebsiteHostnameNormalizer
+            .validateCustomNormalizedList(customHostnames)
+        guard isEnabled else {
+            return validatedCustomHostnames
+        }
+        return try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(
+            validatedCustomHostnames + hostnames
+        )
+    }
+
+    public static func requiresHostnameVisibility(
+        chromeIsSelected: Bool,
+        customHostnames: [String],
+        isEnabled: Bool
+    ) -> Bool {
+        chromeIsSelected && (!customHostnames.isEmpty || isEnabled)
+    }
+}
+
 public enum ProxyWebsiteHostnameError: LocalizedError, Equatable {
     case emptyInput
     case internalWhitespace
@@ -25,7 +66,8 @@ public enum ProxyWebsiteHostnameError: LocalizedError, Equatable {
     case invalidHostname
     case multipleTrailingDots
     case ipLiteralNotAllowed
-    case tooManyHostnames
+    case tooManyCustomHostnames
+    case tooManyEffectiveHostnames
     case notNormalized
 
     public var errorDescription: String? {
@@ -48,8 +90,10 @@ public enum ProxyWebsiteHostnameError: LocalizedError, Equatable {
             return "A hostname can contain at most one trailing dot."
         case .ipLiteralNotAllowed:
             return "IP address literals are not supported."
-        case .tooManyHostnames:
-            return "Proxy Websites supports at most 100 hostnames."
+        case .tooManyCustomHostnames:
+            return "Custom Websites supports at most 100 hostnames."
+        case .tooManyEffectiveHostnames:
+            return "Website Routing supports at most 111 effective hostnames."
         case .notNormalized:
             return "The helper received a website hostname that was not normalized."
         }
@@ -57,7 +101,8 @@ public enum ProxyWebsiteHostnameError: LocalizedError, Equatable {
 }
 
 public enum ProxyWebsiteHostnameNormalizer {
-    public static let maximumHostnameCount = 100
+    public static let maximumCustomHostnameCount = 100
+    public static let maximumEffectiveHostnameCount = 111
 
     public static func normalize(_ input: String) throws -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -108,9 +153,29 @@ public enum ProxyWebsiteHostnameNormalizer {
         return hostname
     }
 
-    public static func validateNormalizedList(_ hostnames: [String]) throws -> [String] {
-        guard hostnames.count <= maximumHostnameCount else {
-            throw ProxyWebsiteHostnameError.tooManyHostnames
+    public static func validateCustomNormalizedList(_ hostnames: [String]) throws -> [String] {
+        try validateNormalizedList(
+            hostnames,
+            maximumCount: maximumCustomHostnameCount,
+            countError: .tooManyCustomHostnames
+        )
+    }
+
+    public static func validateEffectiveNormalizedList(_ hostnames: [String]) throws -> [String] {
+        try validateNormalizedList(
+            hostnames,
+            maximumCount: maximumEffectiveHostnameCount,
+            countError: .tooManyEffectiveHostnames
+        )
+    }
+
+    private static func validateNormalizedList(
+        _ hostnames: [String],
+        maximumCount: Int,
+        countError: ProxyWebsiteHostnameError
+    ) throws -> [String] {
+        guard hostnames.count <= maximumCount else {
+            throw countError
         }
 
         var normalized = Set<String>()
@@ -127,18 +192,18 @@ public enum ProxyWebsiteHostnameNormalizer {
             }
             normalized.insert(hostname)
         }
-        guard normalized.count <= maximumHostnameCount else {
-            throw ProxyWebsiteHostnameError.tooManyHostnames
+        guard normalized.count <= maximumCount else {
+            throw countError
         }
         return normalized.sorted()
     }
 
     public static func adding(_ input: String, to hostnames: [String]) throws -> [String] {
         let hostname = try normalize(input)
-        var result = try validateNormalizedList(hostnames)
+        var result = try validateCustomNormalizedList(hostnames)
         if !result.contains(hostname) {
-            guard result.count < maximumHostnameCount else {
-                throw ProxyWebsiteHostnameError.tooManyHostnames
+            guard result.count < maximumCustomHostnameCount else {
+                throw ProxyWebsiteHostnameError.tooManyCustomHostnames
             }
             result.append(hostname)
             result.sort()

@@ -178,7 +178,7 @@ public enum SingBoxConfigurationBuilder {
             .replacingOccurrences(of: #"\/"#, with: "/")
         let chromeRegex = "^\(escapedPath)/"
         let normalizedWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
-            .validateNormalizedList(proxyWebsiteHostnames)
+            .validateEffectiveNormalizedList(proxyWebsiteHostnames)
 
         return SingBoxConfiguration(
             log: .init(level: "info", timestamp: true),

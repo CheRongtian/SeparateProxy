@@ -125,8 +125,22 @@ struct ContentView: View {
     }
 
     private var proxyWebsitesSection: some View {
-        DisclosureGroup("Proxy Websites (\(viewModel.proxyWebsiteHostnames.count))") {
+        DisclosureGroup("Website Routing") {
             VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: $viewModel.googleWebsiteRoutingIsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Google")
+                        Text("Google Search, Drive, Account / OAuth, and Gemini")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                Text("Custom Websites (\(viewModel.proxyWebsiteHostnames.count))")
+                    .font(.subheadline.bold())
+
                 HStack {
                     TextField(
                         "https://example.com/path",
@@ -143,7 +157,7 @@ struct ContentView: View {
                 }
 
                 if viewModel.proxyWebsiteHostnames.isEmpty {
-                    Text("Chrome remains direct while no Proxy Websites are configured.")
+                    Text("No custom websites are configured.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {

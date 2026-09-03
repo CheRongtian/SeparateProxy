@@ -10,6 +10,17 @@ final class ProxyViewModel: ObservableObject {
             UserDefaults.standard.set(chromeIsSelected, forKey: Self.chromeSelectionKey)
         }
     }
+    @Published var googleWebsiteRoutingIsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                googleWebsiteRoutingIsEnabled,
+                forKey: Self.googleWebsiteRoutingSelectionKey
+            )
+            if state == .running {
+                message = "Google Website Routing changes will apply the next time the proxy starts."
+            }
+        }
+    }
     @Published var codexIsSelected: Bool {
         didSet {
             UserDefaults.standard.set(codexIsSelected, forKey: Self.codexSelectionKey)
@@ -57,6 +68,7 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var chromeECHCanRemove = false
 
     private static let chromeSelectionKey = "chrome-is-selected"
+    private static let googleWebsiteRoutingSelectionKey = "google-website-routing-is-enabled"
     private static let codexSelectionKey = "codex-is-selected"
     private static let gitSelectionKey = "git-is-selected"
     private static let dockerHubSelectionKey = "docker-is-selected"
@@ -80,6 +92,9 @@ final class ProxyViewModel: ObservableObject {
         } else {
             chromeIsSelected = UserDefaults.standard.bool(forKey: Self.chromeSelectionKey)
         }
+        googleWebsiteRoutingIsEnabled = UserDefaults.standard.bool(
+            forKey: Self.googleWebsiteRoutingSelectionKey
+        )
         codexIsSelected = UserDefaults.standard.bool(forKey: Self.codexSelectionKey)
         gitIsSelected = UserDefaults.standard.bool(forKey: Self.gitSelectionKey)
         dockerHubIsSelected = UserDefaults.standard.bool(forKey: Self.dockerHubSelectionKey)
@@ -87,7 +102,7 @@ final class ProxyViewModel: ObservableObject {
             forKey: Self.proxyWebsiteHostnamesKey
         ) ?? []
         proxyWebsiteHostnames = (
-            try? ProxyWebsiteHostnameNormalizer.validateNormalizedList(storedHostnames)
+            try? ProxyWebsiteHostnameNormalizer.validateCustomNormalizedList(storedHostnames)
         ) ?? []
         refreshLocalState()
     }
@@ -420,11 +435,15 @@ final class ProxyViewModel: ObservableObject {
             return
         }
 
-        if chromeIsSelected, !proxyWebsiteHostnames.isEmpty {
+        if GoogleWebsiteRouting.requiresHostnameVisibility(
+            chromeIsSelected: chromeIsSelected,
+            customHostnames: proxyWebsiteHostnames,
+            isEnabled: googleWebsiteRoutingIsEnabled
+        ) {
             do {
                 guard try chromeECHManager.isRequirementSatisfied() else {
                     showChromeECHConfirmation = true
-                    message = "Proxy Websites requires one-time Chrome ECH configuration."
+                    message = "Chrome Website Routing requires one-time ECH configuration."
                     return
                 }
             } catch {
@@ -444,6 +463,12 @@ final class ProxyViewModel: ObservableObject {
 
         var accessKey: String?
         do {
+            let effectiveProxyWebsiteHostnames = chromeIsSelected
+                ? try GoogleWebsiteRouting.effectiveHostnames(
+                    customHostnames: proxyWebsiteHostnames,
+                    isEnabled: googleWebsiteRoutingIsEnabled
+                )
+                : []
             accessKey = try keychain.load()
             guard let accessKey else {
                 throw KeychainStoreError.missingItem
@@ -457,7 +482,7 @@ final class ProxyViewModel: ObservableObject {
                 gitEnabled: gitIsSelected,
                 dockerEnabled: dockerHubIsSelected,
                 vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : "",
-                proxyWebsiteHostnames: chromeIsSelected ? proxyWebsiteHostnames : []
+                proxyWebsiteHostnames: effectiveProxyWebsiteHostnames
             ) { [weak self] result in
                 Task { @MainActor in
                     self?.applyHelperResult(result)

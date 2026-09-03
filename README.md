@@ -1,6 +1,6 @@
 # SeparateProxy
 
-SeparateProxy routes user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, and narrowly scoped Docker Hub HTTPS traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
+SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, and narrowly scoped Docker Hub HTTPS traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
 
 ```text
 Configured Chrome websites        -> IPv4 fallback -> hostname recovery -> Outline remote resolution
@@ -16,7 +16,7 @@ Every unmatched process           -> direct
 
 The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and four independently selectable targets:
 
-- Google Chrome Website Routing with a user-maintained exact-hostname list;
+- Google Chrome Website Routing with an independent built-in Google option and a user-maintained exact-hostname list;
 - the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route;
 - active Apple/Xcode Git HTTPS remote transport over TCP/443;
 - Docker Hub first-party registry, authentication, and control HTTPS on exact hostnames.
@@ -29,6 +29,7 @@ The macOS app provides:
 
 - a SwiftUI interface;
 - Google Chrome discovery through Launch Services;
+- an independent Google Website Routing option for 11 curated exact hostnames;
 - up to 100 user-configured exact Proxy Website hostnames;
 - active OpenAI Codex VS Code extension discovery through VS Code metadata;
 - active Apple/Xcode Git discovery through the system developer-directory selection;
@@ -121,7 +122,32 @@ Chrome helper processes remain under the app bundle, so one bundle-path regex co
 
 ### Chrome Website Routing
 
-Selecting Chrome enables Website Routing. It no longer sends all Chrome traffic through Outline. Users can paste a hostname or a complete HTTPS URL, and the app stores only its normalized exact hostname:
+Selecting Chrome enables Website Routing. It no longer sends all Chrome traffic through Outline. Website Routing has two independent product-state sources:
+
+- **Google**, a built-in clickable option;
+- **Custom Websites**, a user-maintained exact-hostname list.
+
+The Google selection is persisted independently and never writes its built-in hostnames into the Custom Websites list. Before Start, the app merges enabled Google hosts with Custom Websites, deduplicates them, and applies deterministic sorting. The existing XPC hostname-array field carries only that effective list, so the privileged helper and configuration builder do not contain a Google-specific routing capability.
+
+The built-in Google option targets these 11 exact hostnames:
+
+```text
+google.com
+www.google.com
+drive.google.com
+docs.google.com
+sheets.google.com
+slides.google.com
+drive.usercontent.google.com
+accounts.google.com
+gemini.google.com
+jnn-pa.googleapis.com
+www.googleapis.com
+```
+
+The first nine have core or entry-workflow evidence for Google Search, Drive, Account/OAuth, and Gemini. `jnn-pa.googleapis.com` and `www.googleapis.com` are narrowly scoped proactive compatibility candidates supported by static/official evidence. The complete 11-host set has been implemented and validated offline; manual SeparateProxy runtime validation is pending. It does not represent all Google traffic and excludes YouTube, Meet media, general Google Cloud traffic, Firebase, App Engine, ads, analytics, Chrome update, and Safe Browsing.
+
+Custom Website users can paste a hostname or a complete HTTPS URL, and the app stores only its normalized exact hostname:
 
 ```text
 https://www.youtube.com/watch?v=abc123
@@ -154,7 +180,9 @@ With `chatgpt.com` configured, the generated Chrome rules are equivalent to this
 
 The first rule is a browser-wide compatibility rule. It rejects Chrome IPv6 before hostname sniffing so Chrome can retry over IPv4. This behavior is independent of the later Website Proxy/Direct decision. Sniff actions inspect TLS SNI, QUIC ClientHello, or HTTP Host metadata and do not override the destination. Each exact hostname has its own route rules because `override_address` is a static string. A matching rule restores the destination to that hostname while retaining the original port, so Shadowsocks carries a DOMAIN destination and the Outline server resolves it. After IPv4 fallback, configured exact hostnames use Outline and ordinary Chrome websites reach `final: direct`.
 
-With an empty Proxy Websites list, only the browser-wide Chrome IPv6 compatibility rule is generated. No Chrome TLS, QUIC, HTTP, or website-route rules are generated. Chrome IPv4 traffic therefore reaches `final: direct`, and Website Routing does not require ECH to be disabled. A non-empty list requires the existing ECH visibility condition. Secure DNS is not a Website Routing prerequisite.
+With Google disabled and an empty Custom Websites list, only the browser-wide Chrome IPv6 compatibility rule is generated. No Chrome TLS, QUIC, HTTP, or website-route rules are generated. Chrome IPv4 traffic therefore reaches `final: direct`, and Website Routing does not require ECH to be disabled. Google enabled or a non-empty Custom Websites list activates the same existing sniff and exact-host route shape and requires the existing ECH visibility condition. Secure DNS is not a Website Routing prerequisite.
+
+Custom Websites retains its 100-host product limit. The 11 built-in Google hostnames do not consume that quota. After merging and deduplication, the helper and Core accept at most 111 validated effective exact hostnames. A Custom entry that duplicates a built-in Google hostname produces one route pair while remaining stored as Custom data, so it continues to work after Google is disabled.
 
 List changes are saved immediately and apply to the next Start that actually launches a new sing-box process. A normal complete Stop followed by Start launches a new process and loads the new config. In the abnormal stale-process case, the helper can write and check a new config while the controller returns an already-running recorded PID; that process keeps its previously loaded in-memory config. Existing HTTP/2, HTTP/3, TLS, or QUIC connections can also retain their previous route until they reconnect. Restarting Chrome gives the cleanest deterministic application of a changed list.
 
@@ -211,14 +239,14 @@ The two additional rules support the Codex Work locally usage and remaining-allo
 
 ### Chrome and Codex together
 
-With Chrome and Codex selected and at least one Proxy Website configured, the high-level rule order is:
+With Chrome and Codex selected and at least one effective Website Routing hostname, the high-level rule order is:
 
 ```text
 1. Chrome IPv6 -> immediate compatibility reject for IPv4 fallback
 2. Chrome TLS/443 -> inspect SNI
 3. Chrome QUIC/443 -> inspect hostname
 4. Chrome HTTP/80 -> inspect Host
-5. exact Proxy Website -> restore hostname destination -> Outline
+5. exact built-in Google or Custom Website -> restore hostname destination -> Outline
 6. exact Codex executable + TCP/443 -> TLS SNI destination recovery
 7. exact Codex executable -> Outline
 8. exact VS Code Plugin Helper + TCP/443 -> inspect TLS SNI only
@@ -226,7 +254,7 @@ With Chrome and Codex selected and at least one Proxy Website configured, the hi
 10. final -> direct
 ```
 
-With an empty Proxy Websites list, Chrome contributes only its IPv6 compatibility reject before the Codex rules; it contributes no TLS, QUIC, HTTP, or per-host website rules. Codex rules are appended field-for-field after the Chrome rules. The Proxy Websites list is never applied to Codex.
+With Google disabled and an empty Custom Websites list, Chrome contributes only its IPv6 compatibility reject before the Codex rules; it contributes no TLS, QUIC, HTTP, or per-host website rules. Codex rules are appended field-for-field after the Chrome rules. Chrome Website Routing hostnames are never applied to Codex.
 
 When Git is also selected, its two rules are appended after all existing Chrome and Codex rules: exact helper TCP/443 TLS sniffing with destination recovery, followed by exact helper TCP/443 routing to Outline. Docker Hub rules, when selected, follow Git without changing any earlier rule. Existing Chrome, Codex, and Git fields and ordering remain unchanged. All unmatched traffic still reaches `final: direct`.
 
@@ -414,7 +442,7 @@ hub.docker.com
 
 Docker Hub V1 generates no whole-backend route, whole-CLI route, UDP rule, IPv6 workaround, wildcard, suffix rule, plain-HTTP rule, custom-port rule, or third-party registry rule. It excludes `auth.docker.com`, `cdn.auth0.com`, GHCR, Quay, Harbor, private registries, arbitrary Docker CLI traffic, and arbitrary container egress.
 
-Browser authorization remains separate. For a browser device-login flow, add `login.docker.com` manually to Chrome **Proxy Websites**. Google authorization may additionally require `accounts.google.com`; add further exact hostnames only when the observed browser flow requires them. Selecting Docker Hub never modifies Chrome websites, DNS, or ECH settings.
+Browser authorization remains separate. For a browser device-login flow, add `login.docker.com` manually to Chrome **Custom Websites**. The independent Google option includes exact `accounts.google.com` for Google-side authorization. Selecting Docker Hub never enables Google, modifies Custom Websites, or changes Chrome DNS/ECH settings by itself.
 
 Only the `docker-is-selected` Boolean is persisted. Docker paths, versions, hostnames, registries, accounts, tokens, and credentials are not persisted. XPC adds only `dockerEnabled`; the helper derives all paths and rules itself. A selected target with an invalid or incomplete Docker installation fails before configuration is written or sing-box is started.
 
@@ -487,7 +515,7 @@ If Chrome, the user, or another tool changed any target value, SeparateProxy lea
 
 ## Chrome ECH Integration
 
-Chrome Website Routing classifies new connections by observable TLS, QUIC, or HTTP hostname. Encrypted ClientHello can hide TLS and QUIC server names, so a selected Chrome target with a non-empty Proxy Websites list must satisfy one of these conditions before Start:
+Chrome Website Routing classifies new connections by observable TLS, QUIC, or HTTP hostname. Encrypted ClientHello can hide TLS and QUIC server names, so a selected Chrome target with Google enabled or a non-empty Custom Websites list must satisfy one of these conditions before Start:
 
 - Chrome Local State contains `ssl.ech_enabled = false`;
 - the managed `EncryptedClientHelloEnabled` policy is explicitly `false`.
@@ -611,7 +639,7 @@ Do not delete runtime files while the proxy is running.
 - Directory checks use `lstat`; file operations use directory-relative descriptors, `O_NOFOLLOW`, regular-file/owner checks, and atomic rename.
 - App and helper constrain XPC peers with bundle identifier and Apple Team ID code-signing requirements.
 - The helper canonicalizes and revalidates the Chrome bundle, performs authoritative Codex discovery, independently discovers and validates Apple/Xcode Git from the active developer directory, and independently validates Docker.app plus its fixed bundled backend and CLI.
-- XPC submits only fixed target selections and the existing Chrome/VS Code candidate bundle paths. It cannot submit a Docker nested executable path, Git helper path, regex, route JSON, target hostname list, executable command, shell command, or sing-box argument.
+- XPC submits fixed target selections, the existing Chrome/VS Code candidate bundle paths, and validated exact Chrome Website Routing hostname strings. It cannot submit a Docker nested executable path, Git helper path, regex, route JSON, process selector, outbound, executable command, shell command, or sing-box argument.
 - The helper derives bundled sing-box relative to its own executable.
 - Stop validates PID, root UID, and exact command before `SIGTERM`.
 - Helper and legacy scripts never use `pkill` or `killall`.
@@ -653,11 +681,12 @@ open macOS/SeparateProxy.xcodeproj
 4. copy it to `/Applications` and launch that copy;
 5. save the Outline key;
 6. select one or more targets: Chrome, Codex, Git, and Docker Hub;
-7. if Chrome is selected and Website Routing is wanted, expand **Proxy Websites**, paste an HTTPS URL or hostname, and select **Add**;
-8. if Chrome is selected with a non-empty Proxy Websites list, confirm the one-time browser-wide ECH change when Website Routing first requires it;
-9. select **Enable Helper** when shown;
-10. if **Approval Required** appears, use **Open System Settings** and enable SeparateProxy under **Login Items & Extensions > App Background Activity**;
-11. refresh until idle state is `Stopped`, then use **Start Proxy**.
+7. if Chrome is selected and built-in Google routing is wanted, expand **Website Routing** and enable **Google**;
+8. add optional exact hostnames under **Custom Websites**;
+9. confirm the one-time browser-wide ECH change when Website Routing first requires it;
+10. select **Enable Helper** when shown;
+11. if **Approval Required** appears, use **Open System Settings** and enable SeparateProxy under **Login Items & Extensions > App Background Activity**;
+12. refresh until idle state is `Stopped`, then use **Start Proxy**.
 
 If a legacy SeparateProxy DNS integration record exists, the first Website Routing Start restores the original DNS preferences before starting. Chrome may be closed and reopened so Local State can be updated safely. External DNS changes are preserved. A real migration error is shown and Start remains blocked.
 
@@ -678,7 +707,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Proxy Website normalization and helper-side validation, exact Chrome website destination recovery and deterministic ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -1003,7 +1032,7 @@ The app refreshes at launch, after operations, and on manual refresh; it does no
 
 ### Proxy Website still goes Direct
 
-1. confirm the normalized exact hostname appears under **Proxy Websites**;
+1. confirm built-in **Google** is enabled or the normalized exact hostname appears under **Custom Websites**;
 2. confirm SeparateProxy was stopped and started after the last list change;
 3. confirm that Start actually launched a new sing-box process; a correct on-disk config alone does not prove the running process loaded it;
 4. restart Chrome if an old HTTP/2, HTTP/3, TLS, or QUIC connection may still be reused;
@@ -1145,13 +1174,13 @@ Strong same-flow log evidence, when retained, is an exact `git-remote-https` or 
 
 Docker Hub routing was not runtime-tested during implementation. A later manual verification should correlate one exact backend or bundled-CLI process path with an Outline outbound to one documented exact hostname. Pull, push, login, and browser authorization cross different process boundaries, so success in one path does not prove the others.
 
-For browser authorization, the Docker Hub target alone is intentionally insufficient. Configure exact login hosts through Chrome Website Routing and evaluate only the hostnames observed in that browser flow. Do not infer whole-container or third-party-registry support from a successful Docker Hub request.
+For browser authorization, the Docker Hub target alone is intentionally insufficient. Configure exact login hosts through Chrome Custom Websites; enable the independent Google option when the browser flow uses Google-side authorization. Evaluate only the hostnames observed in that browser flow. Do not infer whole-container or third-party-registry support from a successful Docker Hub request.
 
 ## Rejected alternatives
 
 - Process lookup: startup sleep, retry loops, or removing the local-source guard.
 - Chrome DNS: global DNS hijack, proxy all `mDNSResponder`, forcing browser DoH through Outline while ordinary data remains Direct, or strict DoH that harms direct use.
-- Chrome Website Routing: whole-Chrome proxy fallback, whole-Chrome UDP rejection, suffix or wildcard expansion, global unknown-SNI rejection, ECH policy installation, browser extensions, PAC, or TLS interception.
+- Chrome Website Routing: whole-Chrome proxy fallback, whole-Chrome UDP rejection, suffix or wildcard expansion, broad `*.google.com` routing, global unknown-SNI rejection, ECH policy installation, browser extensions, PAC, or TLS interception.
 - Chrome IPv6: copying the browser-wide compatibility rule to other targets.
 - Codex: global DNS changes, `mDNSResponder` routing, all-DNS hijack, `/etc/hosts`, fixed IP mappings, broad OpenAI-domain interception, whole-VS-Code or whole-Extension-Host routing, unsupported `codex-code-mode-host`, hardcoded versions, or wildcards over historical versions.
 - Docker Hub: whole-backend routing, whole-CLI routing, all container traffic, Docker proxy-setting integration, third-party registry presets, wildcard/suffix rules, global destination override, UDP routing, automatic Chrome website insertion, or broad OAuth presets.
@@ -1179,9 +1208,10 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - When Chrome is selected, SeparateProxy intentionally rejects native Chrome IPv6 before hostname routing to trigger IPv4 fallback. An otherwise Direct Chrome site therefore does not use its native IPv6 path while this compatibility behavior is active. This rule reflects the tested Chrome/macOS/network environment and is not copied to Codex or other processes.
 - Ordinary Chrome sites use Chrome's current DNS behavior and retain their original destination for Direct egress.
 - Configured sites use Outline-side resolution only after an observable exact hostname matches and `override_address` restores the hostname destination.
-- Complex websites may require multiple exact hostname entries; no suffix, wildcard, dependency expansion, or service preset is generated.
+- Custom Websites may require multiple exact hostname entries; no suffix, wildcard, or dependency expansion is generated. Google is the single built-in curated exact-host option and does not imply all Google services.
 - Paths, queries, and fragments are discarded during input normalization and never participate in routing.
 - ECH is disabled browser-wide while Website Routing needs hostname visibility. HTTPS content remains encrypted, while network observers can see more hostname information.
+- Google Website Routing has offline config validation only; manual Search, Drive, Account/OAuth, and Gemini runtime validation is pending.
 - IP-literal, malformed/no-SNI, and unsupported or future QUIC traffic may remain unclassified and fall through to Direct.
 - HTTP/2 and HTTP/3 connection coalescing or existing TLS/QUIC connections can retain an earlier route until reconnect.
 - The internal `ssl.ech_enabled` Chrome preference can change in a future Chrome release; unexpected schemas fail closed.
