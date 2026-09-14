@@ -1,6 +1,6 @@
 # SeparateProxy
 
-SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, and narrowly scoped Docker Hub HTTPS traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
+SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, narrowly scoped Docker Hub HTTPS traffic, and Homebrew Core bottle/update traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
 
 ```text
 Configured Chrome websites        -> IPv4 fallback -> hostname recovery -> Outline remote resolution
@@ -11,15 +11,18 @@ VS Code Extension Host            -> Outline only for exact chatgpt.com TLS/443
 Apple/Xcode Git HTTPS helper      -> TLS/443 hostname recovery -> Outline
 Docker backend + exact Hub host   -> TLS/443 hostname recovery -> Outline
 Bundled Docker CLI + login host   -> TLS/443 hostname recovery -> Outline
+System curl + exact brew host     -> TLS/443 hostname recovery -> Outline
+Apple Git helper + github.com     -> scoped Homebrew self-update -> Outline
 Every unmatched process           -> direct
 ```
 
-The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and four independently selectable targets:
+The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and five independently selectable targets:
 
 - Google Chrome Website Routing with an independent built-in Google option and a user-maintained exact-hostname list;
 - the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route;
 - active Apple/Xcode Git HTTPS remote transport over TCP/443;
-- Docker Hub first-party registry, authentication, and control HTTPS on exact hostnames.
+- Docker Hub first-party registry, authentication, and control HTTPS on exact hostnames;
+- Homebrew default API metadata, Core bottles, and self-update transport on exact hostnames.
 
 It has not been validated with unrelated Shadowsocks services. It does not proxy Visual Studio Code as a whole.
 
@@ -34,10 +37,11 @@ The macOS app provides:
 - active OpenAI Codex VS Code extension discovery through VS Code metadata;
 - active Apple/Xcode Git discovery through the system developer-directory selection;
 - Docker Desktop discovery through Launch Services with fixed bundled backend and CLI executables;
+- default-prefix Homebrew discovery through static filesystem checks;
 - safe migration and conditional restoration of legacy Chrome DNS integration state;
 - conditional Chrome ECH integration for observable website hostnames;
 - Outline access-key storage in the macOS Keychain;
-- independent Chrome, Codex, Git, and Docker Hub target selection;
+- independent Chrome, Codex, Git, Docker Hub, and Homebrew target selection;
 - Start Proxy and Stop Proxy controls;
 - a privileged helper registered with `SMAppService`;
 - mutually authenticated XPC between the app and helper;
@@ -57,6 +61,7 @@ It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, spee
 - the active `openai.chatgpt` VS Code extension for `darwin-arm64` when Codex is selected;
 - active Apple/Xcode developer tools with their Git HTTPS helper when Git is selected;
 - Docker Desktop with its validated bundled backend and CLI when Docker Hub is selected;
+- Homebrew in `/opt/homebrew` on Apple silicon or `/usr/local` on Intel, plus active Apple/Xcode Git HTTPS support, when Homebrew is selected;
 - a Chrome Local State file when Website Routing must manage ECH or migrate a legacy DNS integration. Opening Chrome once creates this file.
 
 The full Xcode app is not required to run an already built and signed app. The Git target requires either active Xcode developer tools or active Apple Command Line Tools.
@@ -101,6 +106,9 @@ macOS TUN, stack: system
   |-- backend + exact Docker Hub infrastructure hostname -> restore hostname -> Outline
   |-- bundled Docker CLI TCP/443 -> inspect TLS SNI
   |-- CLI + exact Docker login hostname -> restore hostname -> Outline
+  |-- /usr/bin/curl TCP/443 -> inspect TLS SNI without broad destination override
+  |-- curl + exact Homebrew infrastructure hostname -> restore hostname -> Outline
+  |-- Homebrew-only Apple Git helper + exact github.com -> restore hostname -> Outline
   `-- every unmatched process -> direct
 ```
 
@@ -359,7 +367,7 @@ The generated Git rules are equivalent to:
 
 The first rule reuses Patch 2. When TLS SNI is available, `override_destination` replaces a locally resolved IP destination with the hostname and retains port 443, allowing the Outline server to resolve the domain. On timeout, missing SNI, or sniff failure, the original destination remains and the second rule still sends it through Outline. That fallback can succeed when local DNS returned the correct IP and can fail when the local destination was wrong.
 
-Git V1 excludes Homebrew Git, SSH remotes, plain HTTP/80, custom HTTPS ports such as 8443, Git LFS, GitHub CLI, arbitrary credential-manager network flows, Terminal, shells, Visual Studio Code, and arbitrary Git child processes. Git LFS uses its own network executable and can remain Direct even when the repository Git transport is proxied. No repository, `.git/config`, remote URL, credential, token, commit history, or SSH key is read for target discovery.
+The independent Git target excludes Homebrew Git, SSH remotes, plain HTTP/80, custom HTTPS ports such as 8443, Git LFS, GitHub CLI, arbitrary credential-manager network flows, Terminal, shells, Visual Studio Code, and arbitrary Git child processes. The Homebrew target separately covers only the default brew self-update helper connection to exact `github.com`. Git LFS uses its own network executable and can remain Direct even when the repository Git transport is proxied. No repository, `.git/config`, remote URL, credential, token, commit history, or SSH key is read for target discovery.
 
 After switching the active developer directory or upgrading Xcode/Command Line Tools, stop and start SeparateProxy so the new sing-box process receives newly discovered exact helper paths. Git selection is the only persisted Git state.
 
@@ -445,6 +453,34 @@ Docker Hub V1 generates no whole-backend route, whole-CLI route, UDP rule, IPv6 
 Browser authorization remains separate. For a browser device-login flow, add `login.docker.com` manually to Chrome **Custom Websites**. The independent Google option includes exact `accounts.google.com` for Google-side authorization. Selecting Docker Hub never enables Google, modifies Custom Websites, or changes Chrome DNS/ECH settings by itself.
 
 Only the `docker-is-selected` Boolean is persisted. Docker paths, versions, hostnames, registries, accounts, tokens, and credentials are not persisted. XPC adds only `dockerEnabled`; the helper derives all paths and rules itself. A selected target with an invalid or incomplete Docker installation fails before configuration is written or sing-box is started.
+
+## Homebrew target boundary and discovery
+
+Homebrew V1 supports:
+
+- default Homebrew API metadata;
+- Homebrew Core bottle fetch, install, and upgrade;
+- bottle-based `brew fetch`;
+- Homebrew self-update.
+
+The app reports `Installed` only when the current architecture's official default prefix contains both an executable `bin/brew` and `Library/Homebrew`. The supported prefixes are `/opt/homebrew` on Apple silicon and `/usr/local` on Intel. Discovery uses filesystem checks and never executes `brew`. Only the `homebrew-is-selected` Boolean is persisted. XPC carries only `homebrewEnabled`; the privileged helper repeats default-prefix discovery and derives every routing input itself.
+
+Homebrew API and Core bottle transport is scoped to the fixed `/usr/bin/curl` executable over TLS TCP/443. One non-rewriting TLS sniff rule is followed by one exact route for each hostname:
+
+```text
+formulae.brew.sh
+ghcr.io
+pkg-containers.githubusercontent.com
+api.github.com
+```
+
+Each matching route sets `override_address` to the same exact hostname and uses `outline`. The sniff rule omits `override_destination`, so other `/usr/bin/curl` destinations retain their original destination and reach `final: direct`. Because `/usr/bin/curl` is shared, a user or another program that invokes that exact executable for one of the four listed hosts also shares the route.
+
+When Homebrew is selected and the independent Git target is disabled, the helper reuses `AppleGitDiscovery` and generates a second non-rewriting TLS sniff boundary for the validated Apple/Xcode Git HTTPS helper. Only exact `github.com` is restored and routed through Outline for the default `https://github.com/Homebrew/brew` self-update remote. Other Git helper destinations remain Direct.
+
+When Git and Homebrew are both selected, the existing Git target rules remain unchanged and Homebrew adds only its five curl rules. No duplicate Homebrew Git sniff or `github.com` route is generated.
+
+Homebrew V1 does not guarantee arbitrary Cask vendor downloads, source builds, `--build-from-source`, formula resources or patches, custom taps, custom mirrors, `HOMEBREW_NO_INSTALL_FROM_API`, custom or brewed curl/Git, or vendor installer traffic. Those destinations remain Direct unless another independently selected target covers them. Homebrew adds no DNS changes, UDP/QUIC rules, IPv6 reject, TCP/80 rules, Go changes, or sing-box patch.
 
 ## Legacy Chrome DNS integration migration
 
@@ -680,7 +716,7 @@ open macOS/SeparateProxy.xcodeproj
 3. locate `SeparateProxy.app` in Products;
 4. copy it to `/Applications` and launch that copy;
 5. save the Outline key;
-6. select one or more targets: Chrome, Codex, Git, and Docker Hub;
+6. select one or more targets: Chrome, Codex, Git, Docker Hub, and Homebrew;
 7. if Chrome is selected and built-in Google routing is wanted, expand **Website Routing** and enable **Google**;
 8. add optional exact hostnames under **Custom Websites**;
 9. confirm the one-time browser-wide ECH change when Website Routing first requires it;
@@ -707,7 +743,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -1166,7 +1202,7 @@ SeparateProxy stopped
 
 This runtime-verified A/B shows that Apple/Xcode Git HTTPS remote transport worked through SeparateProxy in the tested environment. It does not establish push authentication, Git LFS, GitHub CLI, SSH, every Git feature, every GitHub service, or every HTTPS Git provider.
 
-A GitHub HTTPS remote was used because the local Direct path could not connect to `github.com:443` in the tested environment. GitHub is not hardcoded into the routing policy; selection remains exact validated Apple/Xcode Git HTTPS helper traffic over TCP/443.
+A GitHub HTTPS remote was used because the local Direct path could not connect to `github.com:443` in the tested environment. GitHub is not hardcoded into the independent Git target policy; selection remains exact validated Apple/Xcode Git HTTPS helper traffic over TCP/443. The Homebrew target has its own exact `github.com` self-update rule when that Git target is disabled.
 
 Strong same-flow log evidence, when retained, is an exact `git-remote-https` or canonical `git-remote-http` process path followed by an Outline outbound to `hostname:443`. The manual A/B above did not retain same-flow log proof, so it is recorded as behavioral runtime evidence only.
 
@@ -1196,6 +1232,7 @@ Chrome -> early browser-wide IPv6 fallback + exact websites + hostname destinati
 Codex  -> exact executable + TLS/443 SNI recovery
 Git    -> exact Apple/Xcode HTTPS helper + TLS/443 SNI recovery
 Docker Hub -> exact bundled backend/CLI + exact TLS/443 hostnames
+Homebrew -> fixed system curl + four exact TLS/443 hosts + scoped github.com self-update
 ```
 
 Every new workaround requires a specific symptom, evidence, and narrow target scope. Keep the Chrome IPv6 compatibility behavior scoped to Chrome. Avoid all-app IPv6 rejection, global sniff override, all-app DNS interception, whole-VS-Code routing, hardcoded service addresses/extension versions, startup sleeps, and broad process termination.
@@ -1225,6 +1262,9 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - Docker backend and CLI hostname classification depends on observable TLS SNI. Missing SNI or an unmatched hostname remains Direct.
 - Docker browser authorization remains a separate Chrome Website Routing concern and may require multiple manually observed exact hostnames.
 - Docker Hub routing has generated-config and offline sing-box validation only; manual runtime A/B evidence has not yet been recorded.
+- Homebrew V1 covers only default API metadata, Core bottle transport, and the default brew self-update remote. Arbitrary Cask vendors, source builds, custom taps/mirrors, and custom or brewed curl/Git remain outside its scope.
+- Homebrew curl matching uses the shared `/usr/bin/curl` process boundary. Any caller of that executable accessing the same four exact Homebrew infrastructure hosts shares the Outline route; all other curl hosts remain Direct.
+- Homebrew self-update requires a validated active Apple/Xcode Git HTTPS helper. With the independent Git target disabled, only exact `github.com` is routed for that helper.
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.
 - Helper identifier changes require explicit old-registration cleanup.
@@ -1258,6 +1298,7 @@ Differences from SwiftUI:
 - no Codex discovery/routing;
 - no Git discovery/routing;
 - no Docker Hub discovery/routing;
+- no Homebrew discovery/routing;
 - no Chrome DNS Integration management;
 - repo-local config remains after Stop;
 - PID is under `/private/tmp` and exact command is validated;
@@ -1272,6 +1313,7 @@ Chrome IPv6 is intentionally rejected before hostname routing so Chrome can retr
 Selected Codex integration traffic uses Outline within its documented exact-process boundaries.
 Selected Apple/Xcode Git HTTPS/443 remote transport uses Outline within its documented exact-helper boundary.
 Selected Docker Hub first-party HTTPS traffic uses Outline within its documented exact-process and exact-hostname boundaries.
+Selected Homebrew Core bottle/update traffic uses Outline within its documented system-curl and scoped Git-helper boundaries.
 ```
 
-Unmatched includes Visual Studio Code itself, Homebrew Git, SSH Git, Git LFS, GitHub CLI, local Git commands, integrated-terminal commands, `codex-code-mode-host`, unrelated extension processes, `Code Helper (Plugin)` traffic except for the documented exact `chatgpt.com` TLS TCP/443 route, arbitrary Docker backend/CLI hostnames, third-party registries, and ordinary container egress. The whole Code Helper, Docker backend, and Docker CLI are not proxied.
+Unmatched includes Visual Studio Code itself, Homebrew Cask vendor and source-build destinations, Homebrew Git destinations other than the scoped self-update `github.com` route, SSH Git, Git LFS, GitHub CLI, local Git commands, integrated-terminal commands, `codex-code-mode-host`, unrelated extension processes, `Code Helper (Plugin)` traffic except for the documented exact `chatgpt.com` TLS TCP/443 route, arbitrary Docker backend/CLI hostnames, third-party registries, and ordinary container egress. The whole Code Helper, Docker backend, Docker CLI, system curl, and Apple Git helper are not proxied by the Homebrew target.

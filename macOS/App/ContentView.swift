@@ -282,6 +282,26 @@ struct ContentView: View {
                 }
             }
             .disabled(!viewModel.dockerHubTargetState.canSelect)
+
+            Toggle(isOn: $viewModel.homebrewIsSelected) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "archivebox")
+                        .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Homebrew")
+                            Spacer()
+                            Text(viewModel.homebrewTargetState.label)
+                                .font(.caption.bold())
+                                .foregroundStyle(homebrewStatusColor)
+                        }
+                        Text(viewModel.homebrewTargetState.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .disabled(!viewModel.homebrewTargetState.canSelect)
         }
     }
 
@@ -403,6 +423,15 @@ struct ContentView: View {
         case .installed:
             return .green
         case .notFound, .unsupported:
+            return .secondary
+        }
+    }
+
+    private var homebrewStatusColor: Color {
+        switch viewModel.homebrewTargetState {
+        case .installed:
+            return .green
+        case .notFound:
             return .secondary
         }
     }

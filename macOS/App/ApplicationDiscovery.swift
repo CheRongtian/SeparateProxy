@@ -235,3 +235,36 @@ enum DockerHubTargetDiscovery {
         }
     }
 }
+
+enum HomebrewTargetState: Equatable {
+    case installed(HomebrewInstallation)
+    case notFound
+
+    var canSelect: Bool {
+        guard case .installed = self else { return false }
+        return true
+    }
+
+    var label: String {
+        switch self {
+        case .installed:
+            return "Installed"
+        case .notFound:
+            return "Not Found"
+        }
+    }
+
+    var detail: String {
+        "Core bottles & updates"
+    }
+}
+
+enum HomebrewTargetDiscovery {
+    static func discover() -> HomebrewTargetState {
+        do {
+            return .installed(try HomebrewDiscovery().discoverDefaultInstallation())
+        } catch {
+            return .notFound
+        }
+    }
+}

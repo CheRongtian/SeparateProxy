@@ -37,6 +37,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         codexEnabled: Bool,
         gitEnabled: Bool,
         dockerEnabled: Bool,
+        homebrewEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
         withReply reply: @escaping (NSDictionary) -> Void
@@ -74,11 +75,24 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         )
                     }.discoverActiveInstallation()
                 }
+                let homebrewInstallation = try HomebrewDiscovery.resolveIfEnabled(
+                    homebrewEnabled
+                ) {
+                    try HomebrewDiscovery().discoverDefaultInstallation()
+                }
+                if homebrewInstallation != nil {
+                    _ = try HomebrewSystemCurlValidator.validate()
+                }
+                let homebrewGitInstallation = try AppleGitDiscovery.resolveIfEnabled(
+                    homebrewEnabled && !gitEnabled
+                ) {
+                    try AppleGitDiscovery().discoverActiveInstallation()
+                }
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
                 let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
                     .validateEffectiveNormalizedList(proxyWebsiteHostnames)
                 let configuration: SingBoxConfiguration
-                if codexEnabled || gitEnabled || dockerEnabled {
+                if codexEnabled || gitEnabled || dockerEnabled || homebrewEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
                         chromeBundlePath: validatedChromePath,
@@ -86,6 +100,8 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
                         gitInstallation: gitInstallation,
                         dockerHubInstallation: dockerHubInstallation,
+                        homebrewEnabled: homebrewInstallation != nil,
+                        homebrewGitInstallation: homebrewGitInstallation,
                         proxyWebsiteHostnames: validatedProxyWebsiteHostnames
                     )
                 } else {

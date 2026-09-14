@@ -33,6 +33,7 @@ final class HelperClient {
         codexEnabled: Bool,
         gitEnabled: Bool,
         dockerEnabled: Bool,
+        homebrewEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
         completion: @escaping (Result<NSDictionary, Error>) -> Void
@@ -44,6 +45,7 @@ final class HelperClient {
                 codexEnabled: codexEnabled,
                 gitEnabled: gitEnabled,
                 dockerEnabled: dockerEnabled,
+                homebrewEnabled: homebrewEnabled,
                 vsCodeBundlePath: vsCodeBundlePath,
                 proxyWebsiteHostnames: proxyWebsiteHostnames
             ) { completion(.success($0)) }

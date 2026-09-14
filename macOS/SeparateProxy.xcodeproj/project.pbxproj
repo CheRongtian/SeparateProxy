@@ -15,6 +15,7 @@
 		300000000000000000000006 /* ProxyWebsiteHostname.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000006 /* ProxyWebsiteHostname.swift */; };
 		300000000000000000000007 /* AppleGitDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000007 /* AppleGitDiscovery.swift */; };
 		300000000000000000000008 /* DockerHubDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000008 /* DockerHubDiscovery.swift */; };
+		300000000000000000000009 /* HomebrewDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000009 /* HomebrewDiscovery.swift */; };
 		300000000000000000000011 /* SeparateProxyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000011 /* SeparateProxyApp.swift */; };
 		300000000000000000000012 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000012 /* ContentView.swift */; };
 		300000000000000000000013 /* ProxyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000013 /* ProxyViewModel.swift */; };
@@ -43,6 +44,8 @@
 		300000000000000000000045 /* AppleGitDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000038 /* AppleGitDiscoveryTests.swift */; };
 		300000000000000000000046 /* DockerHubDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000039 /* DockerHubDiscoveryTests.swift */; };
 		300000000000000000000047 /* DockerHubConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000040 /* DockerHubConfigurationTests.swift */; };
+		300000000000000000000048 /* HomebrewDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000044 /* HomebrewDiscoveryTests.swift */; };
+		300000000000000000000049 /* HomebrewConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000045 /* HomebrewConfigurationTests.swift */; };
 		300000000000000000000041 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
 		300000000000000000000042 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
 		300000000000000000000043 /* libSeparateProxyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* libSeparateProxyCore.a */; };
@@ -118,6 +121,7 @@
 		100000000000000000000006 /* ProxyWebsiteHostname.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyWebsiteHostname.swift; sourceTree = "<group>"; };
 		100000000000000000000007 /* AppleGitDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleGitDiscovery.swift; sourceTree = "<group>"; };
 		100000000000000000000008 /* DockerHubDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerHubDiscovery.swift; sourceTree = "<group>"; };
+		100000000000000000000009 /* HomebrewDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomebrewDiscovery.swift; sourceTree = "<group>"; };
 		100000000000000000000011 /* SeparateProxyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeparateProxyApp.swift; sourceTree = "<group>"; };
 		100000000000000000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		100000000000000000000013 /* ProxyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyViewModel.swift; sourceTree = "<group>"; };
@@ -143,6 +147,8 @@
 		100000000000000000000038 /* AppleGitDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleGitDiscoveryTests.swift; sourceTree = "<group>"; };
 		100000000000000000000039 /* DockerHubDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerHubDiscoveryTests.swift; sourceTree = "<group>"; };
 		100000000000000000000040 /* DockerHubConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerHubConfigurationTests.swift; sourceTree = "<group>"; };
+		100000000000000000000044 /* HomebrewDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomebrewDiscoveryTests.swift; sourceTree = "<group>"; };
+		100000000000000000000045 /* HomebrewConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomebrewConfigurationTests.swift; sourceTree = "<group>"; };
 		100000000000000000000041 /* ../bin/sing-box */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = "../bin/sing-box"; sourceTree = "<group>"; };
 		100000000000000000000042 /* com.cherongtian.SeparateProxy.Helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.cherongtian.SeparateProxy.Helper.plist; sourceTree = "<group>"; };
 		100000000000000000000043 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -225,6 +231,7 @@
 				100000000000000000000006 /* ProxyWebsiteHostname.swift */,
 				100000000000000000000007 /* AppleGitDiscovery.swift */,
 				100000000000000000000008 /* DockerHubDiscovery.swift */,
+				100000000000000000000009 /* HomebrewDiscovery.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -280,6 +287,8 @@
 				100000000000000000000038 /* AppleGitDiscoveryTests.swift */,
 				100000000000000000000039 /* DockerHubDiscoveryTests.swift */,
 				100000000000000000000040 /* DockerHubConfigurationTests.swift */,
+				100000000000000000000044 /* HomebrewDiscoveryTests.swift */,
+				100000000000000000000045 /* HomebrewConfigurationTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -473,6 +482,7 @@
 				300000000000000000000006 /* ProxyWebsiteHostname.swift in Sources */,
 				300000000000000000000007 /* AppleGitDiscovery.swift in Sources */,
 				300000000000000000000008 /* DockerHubDiscovery.swift in Sources */,
+				300000000000000000000009 /* HomebrewDiscovery.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -494,6 +504,8 @@
 				300000000000000000000045 /* AppleGitDiscoveryTests.swift in Sources */,
 				300000000000000000000046 /* DockerHubDiscoveryTests.swift in Sources */,
 				300000000000000000000047 /* DockerHubConfigurationTests.swift in Sources */,
+				300000000000000000000048 /* HomebrewDiscoveryTests.swift in Sources */,
+				300000000000000000000049 /* HomebrewConfigurationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

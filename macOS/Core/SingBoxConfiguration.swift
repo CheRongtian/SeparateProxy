@@ -228,16 +228,25 @@ public enum SingBoxConfigurationBuilder {
         vsCodePluginHelperExecutablePath: String?,
         gitInstallation: AppleGitInstallation? = nil,
         dockerHubInstallation: DockerHubInstallation? = nil,
+        homebrewEnabled: Bool = false,
+        homebrewGitInstallation: AppleGitInstallation? = nil,
         proxyWebsiteHostnames: [String] = []
     ) throws -> SingBoxConfiguration {
         guard chromeBundlePath != nil
             || codexExecutablePath != nil
             || gitInstallation != nil
-            || dockerHubInstallation != nil else {
+            || dockerHubInstallation != nil
+            || homebrewEnabled else {
             throw SingBoxConfigurationError.noTargetsSelected
         }
         guard (codexExecutablePath == nil) == (vsCodePluginHelperExecutablePath == nil) else {
             throw SingBoxConfigurationError.invalidVSCodePluginHelperExecutablePath
+        }
+        guard homebrewEnabled || homebrewGitInstallation == nil else {
+            throw SingBoxConfigurationError.noTargetsSelected
+        }
+        guard !homebrewEnabled || gitInstallation != nil || homebrewGitInstallation != nil else {
+            throw SingBoxConfigurationError.invalidGitHelperPaths
         }
 
         var additionalRules: [SingBoxConfiguration.Route.Rule] = []
@@ -252,6 +261,11 @@ public enum SingBoxConfigurationBuilder {
         }
         if let dockerHubInstallation {
             additionalRules += try makeDockerHubRules(installation: dockerHubInstallation)
+        }
+        if homebrewEnabled {
+            additionalRules += try makeHomebrewRules(
+                gitInstallation: gitInstallation == nil ? homebrewGitInstallation : nil
+            )
         }
 
         if let chromeBundlePath {
@@ -446,27 +460,7 @@ public enum SingBoxConfigurationBuilder {
     private static func makeGitRules(
         installation: AppleGitInstallation
     ) throws -> [SingBoxConfiguration.Route.Rule] {
-        let entryURL = URL(fileURLWithPath: installation.httpsHelperEntryPath)
-            .standardizedFileURL
-        let canonicalURL = URL(fileURLWithPath: installation.canonicalHTTPHelperPath)
-            .standardizedFileURL
-        guard installation.httpsHelperEntryPath.hasPrefix("/"),
-              installation.canonicalHTTPHelperPath.hasPrefix("/"),
-              entryURL.lastPathComponent == "git-remote-https",
-              canonicalURL.lastPathComponent == "git-remote-http",
-              entryURL.deletingLastPathComponent() == canonicalURL.deletingLastPathComponent(),
-              !installation.httpsHelperEntryPath.contains("\n"),
-              !installation.httpsHelperEntryPath.contains("\0"),
-              !installation.canonicalHTTPHelperPath.contains("\n"),
-              !installation.canonicalHTTPHelperPath.contains("\0") else {
-            throw SingBoxConfigurationError.invalidGitHelperPaths
-        }
-
-        let processPathRegex = [entryURL.path, canonicalURL.path].map { path in
-            let escapedPath = NSRegularExpression.escapedPattern(for: path)
-                .replacingOccurrences(of: #"\/"#, with: "/")
-            return "^\(escapedPath)$"
-        }
+        let processPathRegex = try gitProcessPathRegex(installation: installation)
         return [
             .init(
                 processPathRegex: processPathRegex,
@@ -484,6 +478,92 @@ public enum SingBoxConfigurationBuilder {
                 outbound: "outline"
             ),
         ]
+    }
+
+    private static func gitProcessPathRegex(
+        installation: AppleGitInstallation
+    ) throws -> [String] {
+        let entryURL = URL(fileURLWithPath: installation.httpsHelperEntryPath)
+            .standardizedFileURL
+        let canonicalURL = URL(fileURLWithPath: installation.canonicalHTTPHelperPath)
+            .standardizedFileURL
+        guard installation.httpsHelperEntryPath.hasPrefix("/"),
+              installation.canonicalHTTPHelperPath.hasPrefix("/"),
+              entryURL.lastPathComponent == "git-remote-https",
+              canonicalURL.lastPathComponent == "git-remote-http",
+              entryURL.deletingLastPathComponent() == canonicalURL.deletingLastPathComponent(),
+              !installation.httpsHelperEntryPath.contains("\n"),
+              !installation.httpsHelperEntryPath.contains("\0"),
+              !installation.canonicalHTTPHelperPath.contains("\n"),
+              !installation.canonicalHTTPHelperPath.contains("\0") else {
+            throw SingBoxConfigurationError.invalidGitHelperPaths
+        }
+
+        return [entryURL.path, canonicalURL.path].map { path in
+            let escapedPath = NSRegularExpression.escapedPattern(for: path)
+                .replacingOccurrences(of: #"\/"#, with: "/")
+            return "^\(escapedPath)$"
+        }
+    }
+
+    private static func makeHomebrewRules(
+        gitInstallation: AppleGitInstallation?
+    ) throws -> [SingBoxConfiguration.Route.Rule] {
+        let curlProcessPathRegex = [
+            exactProcessPathRegex(for: HomebrewRoutePolicy.systemCurlExecutablePath),
+        ]
+        var rules: [SingBoxConfiguration.Route.Rule] = [
+            .init(
+                processPathRegex: curlProcessPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"]
+            ),
+        ]
+
+        for hostname in HomebrewRoutePolicy.curlHostnames {
+            rules.append(
+                .init(
+                    processPathRegex: curlProcessPathRegex,
+                    network: "tcp",
+                    destinationPort: 443,
+                    action: "route",
+                    protocolName: "tls",
+                    domains: [hostname],
+                    overrideAddress: hostname,
+                    outbound: "outline"
+                )
+            )
+        }
+
+        if let gitInstallation {
+            let scopedGitProcessPathRegex = try gitProcessPathRegex(
+                installation: gitInstallation
+            )
+            rules.append(
+                .init(
+                    processPathRegex: scopedGitProcessPathRegex,
+                    network: "tcp",
+                    destinationPort: 443,
+                    action: "sniff",
+                    sniffer: ["tls"]
+                )
+            )
+            rules.append(
+                .init(
+                    processPathRegex: scopedGitProcessPathRegex,
+                    network: "tcp",
+                    destinationPort: 443,
+                    action: "route",
+                    protocolName: "tls",
+                    domains: [HomebrewRoutePolicy.gitHostname],
+                    overrideAddress: HomebrewRoutePolicy.gitHostname,
+                    outbound: "outline"
+                )
+            )
+        }
+        return rules
     }
 
     private static func makeDockerHubRules(
