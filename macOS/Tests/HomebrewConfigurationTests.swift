@@ -67,9 +67,10 @@ final class HomebrewConfigurationTests: XCTestCase {
             homebrewGitInstallation: gitInstallation
         )
 
-        XCTAssertEqual(configuration.route.rules.count, 7)
-        assertCurlRules(Array(configuration.route.rules.prefix(5)))
-        assertScopedGitRules(Array(configuration.route.rules.suffix(2)))
+        let targetRules = Array(configuration.route.rules.dropLast())
+        XCTAssertEqual(configuration.route.rules.count, 8)
+        assertCurlRules(Array(targetRules.prefix(5)))
+        assertScopedGitRules(Array(targetRules.suffix(2)))
         XCTAssertEqual(configuration.route.final, "direct")
     }
 
@@ -91,7 +92,7 @@ final class HomebrewConfigurationTests: XCTestCase {
         )
 
         XCTAssertEqual(disabled, baseline)
-        XCTAssertEqual(disabled.route.rules.count, 2)
+        XCTAssertEqual(disabled.route.rules.count, 3)
     }
 
     func testGitOnHomebrewOnKeepsGitRulesAndAvoidsDuplicateScopedGitRules() throws {
@@ -107,9 +108,12 @@ final class HomebrewConfigurationTests: XCTestCase {
             homebrewGitInstallation: nil
         )
 
-        XCTAssertEqual(Array(combined.route.rules.prefix(2)), gitOnly.route.rules)
-        XCTAssertEqual(combined.route.rules.count, 7)
-        assertCurlRules(Array(combined.route.rules.suffix(5)))
+        XCTAssertEqual(
+            Array(combined.route.rules.prefix(2)),
+            Array(gitOnly.route.rules.dropLast())
+        )
+        XCTAssertEqual(combined.route.rules.count, 8)
+        assertCurlRules(Array(combined.route.rules.dropLast().suffix(5)))
         XCTAssertFalse(combined.route.rules.contains {
             $0.domains == [HomebrewRoutePolicy.gitHostname]
         })
@@ -159,11 +163,9 @@ final class HomebrewConfigurationTests: XCTestCase {
             homebrewEnabled: true
         )
 
-        XCTAssertEqual(
-            Array(combined.route.rules.prefix(baseline.route.rules.count)),
-            baseline.route.rules
-        )
-        assertCurlRules(Array(combined.route.rules.suffix(5)))
+        let baselineRules = Array(baseline.route.rules.dropLast())
+        XCTAssertEqual(Array(combined.route.rules.prefix(baselineRules.count)), baselineRules)
+        assertCurlRules(Array(combined.route.rules.dropLast().suffix(5)))
         XCTAssertEqual(combined.route.final, "direct")
         XCTAssertEqual(combined.experimental, baseline.experimental)
     }

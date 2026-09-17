@@ -1,6 +1,6 @@
 # SeparateProxy
 
-SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, narrowly scoped Docker Hub, Kubernetes official-registry, and Google Container Registry HTTPS traffic, and Homebrew Core bottle/update traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
+SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, narrowly scoped Docker Hub, Kubernetes official-registry, and Google Container Registry HTTPS traffic, and Homebrew Core bottle/update traffic through an existing Outline proxy on macOS. Unmatched IPv4 traffic remains direct. Unmatched IPv6 traffic is fast-rejected so dual-stack applications can retry over IPv4. When Chrome is selected, its existing browser-wide IPv6 compatibility reject still runs before website routing.
 
 ```text
 Configured Chrome websites        -> IPv4 fallback -> hostname recovery -> Outline remote resolution
@@ -15,7 +15,8 @@ Docker backend + exact gcr.io     -> TLS/443 hostname recovery -> Outline
 Bundled Docker CLI + login host   -> TLS/443 hostname recovery -> Outline
 System curl + exact brew host     -> TLS/443 hostname recovery -> Outline
 Apple Git helper + github.com     -> scoped Homebrew self-update -> Outline
-Every unmatched process           -> direct
+Unmatched IPv6 traffic            -> fast reject -> intended IPv4 fallback
+Unmatched IPv4 traffic            -> direct
 ```
 
 The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and seven independently selectable targets:
@@ -115,7 +116,8 @@ macOS TUN, stack: system
   |-- /usr/bin/curl TCP/443 -> inspect TLS SNI without broad destination override
   |-- curl + exact Homebrew infrastructure hostname -> restore hostname -> Outline
   |-- Homebrew-only Apple Git helper + exact github.com -> restore hostname -> Outline
-  `-- every unmatched process -> direct
+  |-- unmatched IPv6 -> fast reject for dual-stack IPv4 fallback
+  `-- unmatched IPv4 -> direct
 ```
 
 The default route is always:
@@ -123,6 +125,8 @@ The default route is always:
 ```json
 "final": "direct"
 ```
+
+The final route rule is a generic `ip_version: 6` reject with `no_drop: true`. Every explicit target rule runs before this guard. It keeps the dual-stack TUN from black-holing Direct IPv6 on an IPv4-only uplink, while unmatched IPv4 continues to the Direct final route.
 
 ### Chrome path discovery
 
@@ -265,12 +269,13 @@ With Chrome and Codex selected and at least one effective Website Routing hostna
 7. exact Codex executable -> Outline
 8. exact VS Code Plugin Helper + TCP/443 -> inspect TLS SNI only
 9. same shared host + exact chatgpt.com TLS/443 -> restore hostname and use Outline
-10. final -> direct
+10. unmatched IPv6 -> fast reject for dual-stack IPv4 fallback
+11. final -> direct for unmatched IPv4
 ```
 
 With Google disabled and an empty Custom Websites list, Chrome contributes only its IPv6 compatibility reject before the Codex rules; it contributes no TLS, QUIC, HTTP, or per-host website rules. Codex rules are appended field-for-field after the Chrome rules. Chrome Website Routing hostnames are never applied to Codex.
 
-When Git is also selected, its two rules are appended after all existing Chrome and Codex rules: exact helper TCP/443 TLS sniffing with destination recovery, followed by exact helper TCP/443 routing to Outline. Docker Hub rules, when selected, follow Git without changing any earlier rule. Existing Chrome, Codex, and Git fields and ordering remain unchanged. All unmatched traffic still reaches `final: direct`.
+When Git is also selected, its two rules are appended after all existing Chrome and Codex rules: exact helper TCP/443 TLS sniffing with destination recovery, followed by exact helper TCP/443 routing to Outline. Docker Hub rules, when selected, follow Git without changing any earlier rule. Existing Chrome, Codex, and Git fields and ordering remain unchanged. The final IPv6 guard follows every target rule; unmatched IPv4 still reaches `final: direct`.
 
 ## Codex target boundary and discovery
 
@@ -373,7 +378,7 @@ The generated Git rules are equivalent to:
 
 The first rule reuses Patch 2. When TLS SNI is available, `override_destination` replaces a locally resolved IP destination with the hostname and retains port 443, allowing the Outline server to resolve the domain. On timeout, missing SNI, or sniff failure, the original destination remains and the second rule still sends it through Outline. That fallback can succeed when local DNS returned the correct IP and can fail when the local destination was wrong.
 
-The independent Git target excludes Homebrew Git, SSH remotes, plain HTTP/80, custom HTTPS ports such as 8443, Git LFS, GitHub CLI, arbitrary credential-manager network flows, Terminal, shells, Visual Studio Code, and arbitrary Git child processes. The Homebrew target separately covers only the default brew self-update helper connection to exact `github.com`. Git LFS uses its own network executable and can remain Direct even when the repository Git transport is proxied. No repository, `.git/config`, remote URL, credential, token, commit history, or SSH key is read for target discovery.
+The independent Git target excludes Homebrew Git, SSH remotes, plain HTTP/80, custom HTTPS ports such as 8443, Git LFS, GitHub CLI, arbitrary credential-manager network flows, Terminal, shells, Visual Studio Code, and arbitrary Git child processes. The Homebrew target separately covers only the default brew self-update helper connection to exact `github.com`. Git LFS uses its own network executable and unmatched IPv4 can remain Direct even when the repository Git transport is proxied. No repository, `.git/config`, remote URL, credential, token, commit history, or SSH key is read for target discovery.
 
 After switching the active developer directory or upgrading Xcode/Command Line Tools, stop and start SeparateProxy so the new sing-box process receives newly discovered exact helper paths. Git selection is the only persisted Git state.
 
@@ -452,7 +457,7 @@ login.docker.com
 hub.docker.com
 ```
 
-`override_address` restores a matched TLS hostname so Outline performs remote resolution. The initial sniff rules deliberately omit `override_destination`: backend and CLI traffic with an unmatched hostname retains its original destination and reaches `final: direct`. Backend TCP/443 sniffing can observe TLS ClientHello metadata for unrelated container traffic handled by the shared backend, although unmatched traffic is neither rewritten nor proxied.
+`override_address` restores a matched TLS hostname so Outline performs remote resolution. The initial sniff rules deliberately omit `override_destination`: backend and CLI traffic with an unmatched hostname retains its original destination. Unmatched IPv4 reaches `final: direct`; unmatched IPv6 reaches the final fallback guard. Backend TCP/443 sniffing can observe TLS ClientHello metadata for unrelated container traffic handled by the shared backend, although unmatched traffic is neither rewritten nor proxied.
 
 Docker Hub V1 generates no whole-backend route, whole-CLI route, UDP rule, IPv6 workaround, wildcard, suffix rule, plain-HTTP rule, custom-port rule, or third-party registry rule. It excludes `auth.docker.com`, `cdn.auth0.com`, GHCR, Quay, Harbor, private registries, arbitrary Docker CLI traffic, and arbitrary container egress.
 
@@ -532,11 +537,11 @@ europe-docker.pkg.dev
 us-docker.pkg.dev
 ```
 
-There is no `docker.pkg.dev` suffix, wildcard, or regex route, no whole-backend route, and no `override_destination` on the shared sniff. Unmatched backend traffic reaches `final: direct`. Kubernetes V1 adds no UDP/QUIC, plain HTTP, custom-port, IPv6-reject, DNS, Go, sing-box, or patch behavior.
+There is no `docker.pkg.dev` suffix, wildcard, or regex route, no whole-backend route, and no `override_destination` on the shared sniff. Unmatched backend IPv4 reaches `final: direct`; unmatched IPv6 reaches the generic fallback guard. Kubernetes V1 adds no target-specific UDP/QUIC, plain HTTP, custom-port, IPv6-reject, DNS, Go, sing-box, or patch behavior.
 
 Kubernetes V1 does not guarantee arbitrary workload registries, Docker Hub, GHCR, Quay, legacy GCR, GitLab Registry, ECR, private registries, remote-cluster node pulls, Colima, OrbStack, or unvalidated minikube providers. Docker Hub image pulls remain the responsibility of the independent Docker Hub target. A remote cluster pulls images from its remote nodes, so a local SeparateProxy instance cannot route that transport.
 
-Docker pull, Docker Compose, kind containerd, Docker Desktop Kubernetes, and other Docker Desktop components can all appear on macOS as `com.docker.backend`. sing-box cannot distinguish their VM or container provenance. Therefore any traffic owned by that process and addressed to one of the Kubernetes exact hostnames shares the Kubernetes route, while every unmatched hostname remains Direct.
+Docker pull, Docker Compose, kind containerd, Docker Desktop Kubernetes, and other Docker Desktop components can all appear on macOS as `com.docker.backend`. sing-box cannot distinguish their VM or container provenance. Therefore any traffic owned by that process and addressed to one of the Kubernetes exact hostnames shares the Kubernetes route, while every unmatched IPv4 hostname remains Direct.
 
 ## Container Registries target boundary and discovery
 
@@ -552,7 +557,7 @@ The app persists only `container-registries-is-selected`, and XPC carries only `
 
 Docker Hub, Kubernetes, and Container Registries share one deterministic `com.docker.backend` sniff whenever any of the three targets is enabled. Their exact hostname sets are merged and deduplicated in that order. Container Registries does not add `gcr.io` to the Docker Hub or Kubernetes policies, and it does not affect Docker CLI login rules.
 
-V1 contains no `gcr.io` suffix or wildcard rule and does not cover `*.gcr.io`, Artifact Registry generally, Google Cloud Storage, Google APIs, GHCR, Quay, private registries, UDP/QUIC, plain HTTP, or custom ports. Unmatched destinations retain `final: direct`. Because macOS exposes these Docker Desktop flows through the shared backend process, exact `gcr.io` traffic from Docker build, Docker pull, Compose, kind, or Docker Desktop Kubernetes can all share this route; VM or container provenance cannot be distinguished.
+V1 contains no `gcr.io` suffix or wildcard rule and does not cover `*.gcr.io`, Artifact Registry generally, Google Cloud Storage, Google APIs, GHCR, Quay, private registries, UDP/QUIC, plain HTTP, or custom ports. Unmatched IPv4 destinations retain `final: direct`; unmatched IPv6 reaches the generic fallback guard. Because macOS exposes these Docker Desktop flows through the shared backend process, exact `gcr.io` traffic from Docker build, Docker pull, Compose, kind, or Docker Desktop Kubernetes can all share this route; VM or container provenance cannot be distinguished.
 
 ## Homebrew target boundary and discovery
 
@@ -576,11 +581,11 @@ api.github.com
 
 Each matching route sets `override_address` to the same exact hostname and uses `outline`. The sniff rule omits `override_destination`, so other `/usr/bin/curl` destinations retain their original destination and reach `final: direct`. Because `/usr/bin/curl` is shared, a user or another program that invokes that exact executable for one of the four listed hosts also shares the route.
 
-When Homebrew is selected and the independent Git target is disabled, the helper reuses `AppleGitDiscovery` and generates a second non-rewriting TLS sniff boundary for the validated Apple/Xcode Git HTTPS helper. Only exact `github.com` is restored and routed through Outline for the default `https://github.com/Homebrew/brew` self-update remote. Other Git helper destinations remain Direct.
+When Homebrew is selected and the independent Git target is disabled, the helper reuses `AppleGitDiscovery` and generates a second non-rewriting TLS sniff boundary for the validated Apple/Xcode Git HTTPS helper. Only exact `github.com` is restored and routed through Outline for the default `https://github.com/Homebrew/brew` self-update remote. Other Git helper IPv4 destinations remain Direct.
 
 When Git and Homebrew are both selected, the existing Git target rules remain unchanged and Homebrew adds only its five curl rules. No duplicate Homebrew Git sniff or `github.com` route is generated.
 
-Homebrew V1 does not guarantee arbitrary Cask vendor downloads, source builds, `--build-from-source`, formula resources or patches, custom taps, custom mirrors, `HOMEBREW_NO_INSTALL_FROM_API`, custom or brewed curl/Git, or vendor installer traffic. Those destinations remain Direct unless another independently selected target covers them. Homebrew adds no DNS changes, UDP/QUIC rules, IPv6 reject, TCP/80 rules, Go changes, or sing-box patch.
+Homebrew V1 does not guarantee arbitrary Cask vendor downloads, source builds, `--build-from-source`, formula resources or patches, custom taps, custom mirrors, `HOMEBREW_NO_INSTALL_FROM_API`, custom or brewed curl/Git, or vendor installer traffic. Unmatched IPv4 remains Direct unless another independently selected target covers it. Homebrew adds no target-specific DNS changes, UDP/QUIC rules, IPv6 reject, TCP/80 rules, Go changes, or sing-box patch.
 
 ## Legacy Chrome DNS integration migration
 
@@ -1337,12 +1342,13 @@ Container Registries -> exact Docker backend + exact gcr.io TLS/443
 Homebrew -> fixed system curl + four exact TLS/443 hosts + scoped github.com self-update
 ```
 
-Every new workaround requires a specific symptom, evidence, and narrow target scope. Keep the Chrome IPv6 compatibility behavior scoped to Chrome. Avoid all-app IPv6 rejection, global sniff override, all-app DNS interception, whole-VS-Code routing, hardcoded service addresses/extension versions, startup sleeps, and broad process termination.
+Every new workaround requires a specific symptom, evidence, and narrow target scope. Keep the early Chrome IPv6 compatibility behavior scoped to Chrome. Keep the generic Direct IPv6 fallback guard after every explicit target route; do not move it ahead of target routing or turn it into a target-specific workaround. Avoid global sniff override, all-app DNS interception, whole-VS-Code routing, hardcoded service addresses/extension versions, startup sleeps, and broad process termination.
 
 ## Known limitations
 
 - Only static Outline `ss://` keys have been tested; arbitrary Shadowsocks compatibility is unverified.
 - The bundled binary and Codex target require Apple silicon.
+- While SeparateProxy is active, IPv6 traffic that does not match an explicit proxy target is fast-rejected so dual-stack applications fall back to IPv4. Explicit proxy routes run first, and unmatched IPv4 remains Direct. IPv6-only Direct destinations are unsupported by this V1 behavior.
 - Proxy Websites routes new observable Chrome connections by exact hostname, not individual URLs or HTTP requests.
 - When Chrome is selected, SeparateProxy intentionally rejects native Chrome IPv6 before hostname routing to trigger IPv4 fallback. An otherwise Direct Chrome site therefore does not use its native IPv6 path while this compatibility behavior is active. This rule reflects the tested Chrome/macOS/network environment and is not copied to Codex or other processes.
 - Ordinary Chrome sites use Chrome's current DNS behavior and retain their original destination for Direct egress.
@@ -1361,15 +1367,15 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - Git TLS sniff failure preserves and proxies the original destination IP; hostname recovery cannot correct a wrong local destination when SNI is unavailable.
 - Switching the active developer directory or upgrading developer tools requires a complete SeparateProxy Stop/Start before new exact helper paths take effect.
 - Docker Hub V1 covers only the six documented backend hostnames and two bundled-CLI login hostnames over TLS TCP/443. It does not cover all container traffic, third-party registries, UDP, plain HTTP, custom HTTPS ports, or arbitrary Docker CLI destinations.
-- Docker backend and CLI hostname classification depends on observable TLS SNI. Missing SNI or an unmatched hostname remains Direct.
+- Docker backend and CLI hostname classification depends on observable TLS SNI. Missing SNI or an unmatched IPv4 hostname remains Direct.
 - Docker browser authorization remains a separate Chrome Website Routing concern and may require multiple manually observed exact hostnames.
 - Docker Hub routing has generated-config and offline sing-box validation only; manual runtime A/B evidence has not yet been recorded.
 - Kubernetes V1 supports Docker Desktop-backed local clusters and only the 48 documented official-registry transport hostnames. Arbitrary workload registries, remote-node pulls, Colima, OrbStack, and unvalidated minikube providers remain outside its scope.
 - Kubernetes classification depends on observable TLS SNI from the shared `com.docker.backend` process. It cannot distinguish Docker CLI, Compose, kind, built-in Kubernetes, or other VM/container provenance when they contact the same exact hostname.
-- Container Registries V1 covers only exact `gcr.io` through the shared Docker backend. Subdomains such as `us.gcr.io`, Artifact Registry generally, storage hosts, other registries, and private registries remain Direct.
+- Container Registries V1 covers only exact `gcr.io` through the shared Docker backend. IPv4 traffic to subdomains such as `us.gcr.io`, Artifact Registry generally, storage hosts, other registries, and private registries remains Direct.
 - Container Registries cannot distinguish whether matching `gcr.io` traffic originated from Docker build, Docker pull, Compose, kind, or Docker Desktop Kubernetes.
 - Homebrew V1 covers only default API metadata, Core bottle transport, and the default brew self-update remote. Arbitrary Cask vendors, source builds, custom taps/mirrors, and custom or brewed curl/Git remain outside its scope.
-- Homebrew curl matching uses the shared `/usr/bin/curl` process boundary. Any caller of that executable accessing the same four exact Homebrew infrastructure hosts shares the Outline route; all other curl hosts remain Direct.
+- Homebrew curl matching uses the shared `/usr/bin/curl` process boundary. Any caller of that executable accessing the same four exact Homebrew infrastructure hosts shares the Outline route; all other curl hosts remain Direct over IPv4.
 - Homebrew self-update requires a validated active Apple/Xcode Git HTTPS helper. With the independent Git target disabled, only exact `github.com` is routed for that helper.
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.
@@ -1416,7 +1422,8 @@ Differences from SwiftUI:
 
 ```text
 Configured exact Chrome websites use Outline after the Chrome IPv4 compatibility fallback.
-Other Chrome IPv4 connections and every unmatched Mac process remain direct.
+Other Chrome IPv4 connections and every unmatched IPv4 Mac process remain direct.
+Unmatched IPv6 is fast-rejected after explicit target rules so dual-stack applications can retry over IPv4.
 Chrome IPv6 is intentionally rejected before hostname routing so Chrome can retry over IPv4.
 Selected Codex integration traffic uses Outline within its documented exact-process boundaries.
 Selected Apple/Xcode Git HTTPS/443 remote transport uses Outline within its documented exact-helper boundary.

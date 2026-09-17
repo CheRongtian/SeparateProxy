@@ -35,7 +35,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
 
     public struct Route: Codable, Equatable, Sendable {
         public struct Rule: Codable, Equatable, Sendable {
-            public let processPathRegex: [String]
+            public let processPathRegex: [String]?
             public let ipVersion: Int?
             public let network: String?
             public let destinationPort: UInt16?
@@ -62,7 +62,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
             }
 
             public init(
-                processPathRegex: [String],
+                processPathRegex: [String]? = nil,
                 ipVersion: Int? = nil,
                 network: String? = nil,
                 destinationPort: UInt16? = nil,
@@ -211,10 +211,10 @@ public enum SingBoxConfigurationBuilder {
             ],
             route: .init(
                 autoDetectInterface: true,
-                rules: makeChromeRules(
+                rules: appendingDirectIPv6FallbackRule(to: makeChromeRules(
                     chromeRegex: chromeRegex,
                     proxyWebsiteHostnames: normalizedWebsiteHostnames
-                ),
+                )),
                 final: "direct"
             ),
             experimental: trafficAccountingConfiguration
@@ -287,13 +287,17 @@ public enum SingBoxConfigurationBuilder {
             guard !additionalRules.isEmpty else {
                 return chromeConfiguration
             }
+            var combinedRules = chromeConfiguration.route.rules
+            combinedRules.removeLast()
+            combinedRules.append(contentsOf: additionalRules)
+            combinedRules.append(makeDirectIPv6FallbackRule())
             return SingBoxConfiguration(
                 log: chromeConfiguration.log,
                 inbounds: chromeConfiguration.inbounds,
                 outbounds: chromeConfiguration.outbounds,
                 route: .init(
                     autoDetectInterface: chromeConfiguration.route.autoDetectInterface,
-                    rules: chromeConfiguration.route.rules + additionalRules,
+                    rules: combinedRules,
                     final: chromeConfiguration.route.final
                 ),
                 experimental: chromeConfiguration.experimental
@@ -331,7 +335,7 @@ public enum SingBoxConfigurationBuilder {
             ],
             route: .init(
                 autoDetectInterface: true,
-                rules: additionalRules,
+                rules: appendingDirectIPv6FallbackRule(to: additionalRules),
                 final: "direct"
             ),
             experimental: trafficAccountingConfiguration
@@ -402,6 +406,21 @@ public enum SingBoxConfigurationBuilder {
             }
         }
         return rules
+    }
+
+    private static func appendingDirectIPv6FallbackRule(
+        to rules: [SingBoxConfiguration.Route.Rule]
+    ) -> [SingBoxConfiguration.Route.Rule] {
+        rules + [makeDirectIPv6FallbackRule()]
+    }
+
+    private static func makeDirectIPv6FallbackRule() -> SingBoxConfiguration.Route.Rule {
+        .init(
+            ipVersion: 6,
+            action: "reject",
+            method: "default",
+            noDrop: true
+        )
     }
 
     private static func makeCodexRules(

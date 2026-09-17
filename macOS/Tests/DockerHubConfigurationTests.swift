@@ -53,10 +53,8 @@ final class DockerHubConfigurationTests: XCTestCase {
             proxyWebsiteHostnames: ["chatgpt.com"]
         )
 
-        XCTAssertEqual(
-            Array(combined.route.rules.prefix(baseline.route.rules.count)),
-            baseline.route.rules
-        )
+        let baselineRules = Array(baseline.route.rules.dropLast())
+        XCTAssertEqual(Array(combined.route.rules.prefix(baselineRules.count)), baselineRules)
         XCTAssertEqual(combined.route.rules.count, baseline.route.rules.count + 10)
         XCTAssertEqual(combined.route.final, "direct")
         XCTAssertEqual(combined.experimental, baseline.experimental)
@@ -86,20 +84,19 @@ final class DockerHubConfigurationTests: XCTestCase {
         )
         let dockerOnly = try dockerOnlyConfiguration()
 
+        let baselineRules = Array(baseline.route.rules.dropLast())
+        let dockerRules = Array(dockerOnly.route.rules.dropLast())
+        XCTAssertEqual(Array(combined.route.rules.prefix(baselineRules.count)), baselineRules)
         XCTAssertEqual(
-            Array(combined.route.rules.prefix(baseline.route.rules.count)),
-            baseline.route.rules
-        )
-        XCTAssertEqual(
-            Array(combined.route.rules.dropFirst(baseline.route.rules.count)),
-            dockerOnly.route.rules
+            Array(combined.route.rules.dropFirst(baselineRules.count).dropLast()),
+            dockerRules
         )
         XCTAssertEqual(combined.route.final, "direct")
     }
 
     func testDockerHubOnlyGeneratesExactBackendAndCLIRules() throws {
         let configuration = try dockerOnlyConfiguration()
-        let rules = configuration.route.rules
+        let rules = Array(configuration.route.rules.dropLast())
 
         XCTAssertEqual(rules.count, 10)
         assertSniffRule(
@@ -141,7 +138,7 @@ final class DockerHubConfigurationTests: XCTestCase {
     }
 
     func testDockerHubRulesExcludeUnsupportedDomainsNetworksAndPorts() throws {
-        let rules = try dockerOnlyConfiguration().route.rules
+        let rules = Array(try dockerOnlyConfiguration().route.rules.dropLast())
         let routedDomains = Set(rules.flatMap { $0.domains ?? [] })
 
         for excluded in [
@@ -186,11 +183,11 @@ final class DockerHubConfigurationTests: XCTestCase {
             dockerHubInstallation: installation
         )
         let backendExpression = try NSRegularExpression(
-            pattern: try XCTUnwrap(configuration.route.rules[0].processPathRegex.first)
+            pattern: try XCTUnwrap(configuration.route.rules[0].processPathRegex?.first)
         )
         let cliIndex = DockerHubRoutePolicy.backendHostnames.count + 1
         let cliExpression = try NSRegularExpression(
-            pattern: try XCTUnwrap(configuration.route.rules[cliIndex].processPathRegex.first)
+            pattern: try XCTUnwrap(configuration.route.rules[cliIndex].processPathRegex?.first)
         )
 
         XCTAssertEqual(matches(backendExpression, installation.backendExecutablePath), 1)
@@ -241,7 +238,7 @@ final class DockerHubConfigurationTests: XCTestCase {
 
     func testKubernetesOnlyGeneratesExactBackendRules() throws {
         let configuration = try kubernetesOnlyConfiguration()
-        let rules = configuration.route.rules
+        let rules = Array(configuration.route.rules.dropLast())
 
         XCTAssertEqual(rules.count, KubernetesRoutePolicy.backendHostnames.count + 1)
         assertSniffRule(
@@ -307,8 +304,9 @@ final class DockerHubConfigurationTests: XCTestCase {
         XCTAssertFalse(json.contains("domain_regex"))
         XCTAssertFalse(json.contains("*.docker.pkg.dev"))
         XCTAssertFalse(json.contains("override_destination"))
-        XCTAssertTrue(configuration.route.rules.allSatisfy { $0.network == "tcp" })
-        XCTAssertTrue(configuration.route.rules.allSatisfy { $0.destinationPort == 443 })
+        let targetRules = configuration.route.rules.dropLast()
+        XCTAssertTrue(targetRules.allSatisfy { $0.network == "tcp" })
+        XCTAssertTrue(targetRules.allSatisfy { $0.destinationPort == 443 })
     }
 
     func testDockerAndKubernetesShareOneBackendSniffAndDeterministicUnion() throws {
@@ -334,7 +332,7 @@ final class DockerHubConfigurationTests: XCTestCase {
         XCTAssertEqual(Set(routedDomains).count, routedDomains.count)
         XCTAssertEqual(
             configuration.route.rules.count,
-            1 + expectedDomains.count + 1 + DockerHubRoutePolicy.cliHostnames.count
+            1 + expectedDomains.count + 1 + DockerHubRoutePolicy.cliHostnames.count + 1
         )
     }
 
@@ -379,7 +377,7 @@ final class DockerHubConfigurationTests: XCTestCase {
 
     func testContainerRegistriesOnlyGeneratesExactGCRRoute() throws {
         let configuration = try containerRegistriesOnlyConfiguration()
-        let rules = configuration.route.rules
+        let rules = Array(configuration.route.rules.dropLast())
 
         XCTAssertEqual(rules.count, 2)
         assertSniffRule(

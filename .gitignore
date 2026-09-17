@@ -15,3 +15,9 @@ Secrets.xcconfig
 DerivedData/
 xcuserdata/
 *.xcuserstate
+
+*.log
+*.gz
+writer-sync-debug-20260917-220001/
+writer-after-stop-capture.sh
+writer-bad-capture.sh
