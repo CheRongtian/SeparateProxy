@@ -37,6 +37,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         codexEnabled: Bool,
         gitEnabled: Bool,
         dockerEnabled: Bool,
+        kubernetesEnabled: Bool,
         homebrewEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
@@ -67,7 +68,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                     try AppleGitDiscovery().discoverActiveInstallation()
                 }
                 let dockerHubInstallation = try DockerHubDiscovery.resolveIfEnabled(
-                    dockerEnabled
+                    dockerEnabled || kubernetesEnabled
                 ) {
                     try DockerHubDiscovery {
                         NSWorkspace.shared.urlForApplication(
@@ -92,14 +93,15 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                 let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
                     .validateEffectiveNormalizedList(proxyWebsiteHostnames)
                 let configuration: SingBoxConfiguration
-                if codexEnabled || gitEnabled || dockerEnabled || homebrewEnabled {
+                if codexEnabled || gitEnabled || dockerEnabled || kubernetesEnabled || homebrewEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
                         chromeBundlePath: validatedChromePath,
                         codexExecutablePath: codexInstallation?.executablePath,
                         vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
                         gitInstallation: gitInstallation,
-                        dockerHubInstallation: dockerHubInstallation,
+                        dockerHubInstallation: dockerEnabled ? dockerHubInstallation : nil,
+                        kubernetesInstallation: kubernetesEnabled ? dockerHubInstallation : nil,
                         homebrewEnabled: homebrewInstallation != nil,
                         homebrewGitInstallation: homebrewGitInstallation,
                         proxyWebsiteHostnames: validatedProxyWebsiteHostnames

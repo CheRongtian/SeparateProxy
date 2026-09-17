@@ -228,6 +228,7 @@ public enum SingBoxConfigurationBuilder {
         vsCodePluginHelperExecutablePath: String?,
         gitInstallation: AppleGitInstallation? = nil,
         dockerHubInstallation: DockerHubInstallation? = nil,
+        kubernetesInstallation: DockerHubInstallation? = nil,
         homebrewEnabled: Bool = false,
         homebrewGitInstallation: AppleGitInstallation? = nil,
         proxyWebsiteHostnames: [String] = []
@@ -236,6 +237,7 @@ public enum SingBoxConfigurationBuilder {
             || codexExecutablePath != nil
             || gitInstallation != nil
             || dockerHubInstallation != nil
+            || kubernetesInstallation != nil
             || homebrewEnabled else {
             throw SingBoxConfigurationError.noTargetsSelected
         }
@@ -259,8 +261,11 @@ public enum SingBoxConfigurationBuilder {
         if let gitInstallation {
             additionalRules += try makeGitRules(installation: gitInstallation)
         }
-        if let dockerHubInstallation {
-            additionalRules += try makeDockerHubRules(installation: dockerHubInstallation)
+        if dockerHubInstallation != nil || kubernetesInstallation != nil {
+            additionalRules += try makeDockerRoutingRules(
+                dockerHubInstallation: dockerHubInstallation,
+                kubernetesInstallation: kubernetesInstallation
+            )
         }
         if homebrewEnabled {
             additionalRules += try makeHomebrewRules(
@@ -566,9 +571,18 @@ public enum SingBoxConfigurationBuilder {
         return rules
     }
 
-    private static func makeDockerHubRules(
-        installation: DockerHubInstallation
+    private static func makeDockerRoutingRules(
+        dockerHubInstallation: DockerHubInstallation?,
+        kubernetesInstallation: DockerHubInstallation?
     ) throws -> [SingBoxConfiguration.Route.Rule] {
+        if let dockerHubInstallation,
+           let kubernetesInstallation,
+           dockerHubInstallation != kubernetesInstallation {
+            throw SingBoxConfigurationError.invalidDockerHubInstallation
+        }
+        guard let installation = dockerHubInstallation ?? kubernetesInstallation else {
+            return []
+        }
         let bundleURL = URL(fileURLWithPath: installation.applicationBundlePath)
             .standardizedFileURL
         let backendURL = URL(fileURLWithPath: installation.backendExecutablePath)
@@ -597,8 +611,19 @@ public enum SingBoxConfigurationBuilder {
             throw SingBoxConfigurationError.invalidDockerHubInstallation
         }
 
+        var backendHostnames: [String] = []
+        if dockerHubInstallation != nil {
+            backendHostnames += DockerHubRoutePolicy.backendHostnames
+        }
+        if kubernetesInstallation != nil {
+            backendHostnames += KubernetesRoutePolicy.backendHostnames
+        }
+        var seenBackendHostnames = Set<String>()
+        backendHostnames = backendHostnames.filter {
+            seenBackendHostnames.insert($0).inserted
+        }
+
         let backendRegex = [exactProcessPathRegex(for: backendURL.path)]
-        let cliRegex = [exactProcessPathRegex(for: cliURL.path)]
         var rules: [SingBoxConfiguration.Route.Rule] = [
             .init(
                 processPathRegex: backendRegex,
@@ -608,7 +633,7 @@ public enum SingBoxConfigurationBuilder {
                 sniffer: ["tls"]
             ),
         ]
-        for hostname in DockerHubRoutePolicy.backendHostnames {
+        for hostname in backendHostnames {
             rules.append(
                 .init(
                     processPathRegex: backendRegex,
@@ -623,6 +648,11 @@ public enum SingBoxConfigurationBuilder {
             )
         }
 
+        guard dockerHubInstallation != nil else {
+            return rules
+        }
+
+        let cliRegex = [exactProcessPathRegex(for: cliURL.path)]
         rules.append(
             .init(
                 processPathRegex: cliRegex,

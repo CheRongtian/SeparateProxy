@@ -1,6 +1,6 @@
 # SeparateProxy
 
-SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, narrowly scoped Docker Hub HTTPS traffic, and Homebrew Core bottle/update traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
+SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, narrowly scoped Docker Hub and Kubernetes official-registry HTTPS traffic, and Homebrew Core bottle/update traffic through an existing Outline proxy on macOS. Unmatched processes remain direct. When Chrome is selected, a browser-wide IPv6 compatibility reject runs before website routing so Chrome can retry over IPv4.
 
 ```text
 Configured Chrome websites        -> IPv4 fallback -> hostname recovery -> Outline remote resolution
@@ -10,18 +10,20 @@ OpenAI Codex extension executable -> Outline
 VS Code Extension Host            -> Outline only for exact chatgpt.com TLS/443
 Apple/Xcode Git HTTPS helper      -> TLS/443 hostname recovery -> Outline
 Docker backend + exact Hub host   -> TLS/443 hostname recovery -> Outline
+Docker backend + exact K8s host   -> TLS/443 hostname recovery -> Outline
 Bundled Docker CLI + login host   -> TLS/443 hostname recovery -> Outline
 System curl + exact brew host     -> TLS/443 hostname recovery -> Outline
 Apple Git helper + github.com     -> scoped Homebrew self-update -> Outline
 Every unmatched process           -> direct
 ```
 
-The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and five independently selectable targets:
+The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and six independently selectable targets:
 
 - Google Chrome Website Routing with an independent built-in Google option and a user-maintained exact-hostname list;
 - the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route;
 - active Apple/Xcode Git HTTPS remote transport over TCP/443;
 - Docker Hub first-party registry, authentication, and control HTTPS on exact hostnames;
+- Docker Desktop-backed local Kubernetes official image-registry HTTPS on exact hostnames;
 - Homebrew default API metadata, Core bottles, and self-update transport on exact hostnames.
 
 It has not been validated with unrelated Shadowsocks services. It does not proxy Visual Studio Code as a whole.
@@ -41,7 +43,7 @@ The macOS app provides:
 - safe migration and conditional restoration of legacy Chrome DNS integration state;
 - conditional Chrome ECH integration for observable website hostnames;
 - Outline access-key storage in the macOS Keychain;
-- independent Chrome, Codex, Git, Docker Hub, and Homebrew target selection;
+- independent Chrome, Codex, Git, Docker Hub, Kubernetes, and Homebrew target selection;
 - Start Proxy and Stop Proxy controls;
 - a privileged helper registered with `SMAppService`;
 - mutually authenticated XPC between the app and helper;
@@ -60,7 +62,7 @@ It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, spee
 - Google Chrome installed and discoverable by Launch Services when Chrome is selected;
 - the active `openai.chatgpt` VS Code extension for `darwin-arm64` when Codex is selected;
 - active Apple/Xcode developer tools with their Git HTTPS helper when Git is selected;
-- Docker Desktop with its validated bundled backend and CLI when Docker Hub is selected;
+- Docker Desktop with its validated bundled backend and CLI when Docker Hub is selected, or its validated backend when Kubernetes is selected;
 - Homebrew in `/opt/homebrew` on Apple silicon or `/usr/local` on Intel, plus active Apple/Xcode Git HTTPS support, when Homebrew is selected;
 - a Chrome Local State file when Website Routing must manage ECH or migrate a legacy DNS integration. Opening Chrome once creates this file.
 
@@ -104,6 +106,7 @@ macOS TUN, stack: system
   |-- Apple/Xcode Git HTTPS helper TCP/443 -> recover TLS SNI destination -> Outline
   |-- Docker backend TCP/443 -> inspect TLS SNI
   |-- backend + exact Docker Hub infrastructure hostname -> restore hostname -> Outline
+  |-- backend + exact Kubernetes official-registry hostname -> restore hostname -> Outline
   |-- bundled Docker CLI TCP/443 -> inspect TLS SNI
   |-- CLI + exact Docker login hostname -> restore hostname -> Outline
   |-- /usr/bin/curl TCP/443 -> inspect TLS SNI without broad destination override
@@ -454,6 +457,84 @@ Browser authorization remains separate. For a browser device-login flow, add `lo
 
 Only the `docker-is-selected` Boolean is persisted. Docker paths, versions, hostnames, registries, accounts, tokens, and credentials are not persisted. XPC adds only `dockerEnabled`; the helper derives all paths and rules itself. A selected target with an invalid or incomplete Docker installation fails before configuration is written or sing-box is started.
 
+## Kubernetes target boundary and discovery
+
+Kubernetes V1 covers official image-registry transport for local Kubernetes whose container networking is backed by Docker Desktop. This includes kind clusters running on Docker Desktop and is compatible with Docker Desktop's built-in Kubernetes architecture. Availability requires only the existing validated Docker Desktop backend; the app does not query a Kubernetes API, inspect the current context, or require Docker Desktop's built-in `KubernetesEnabled` setting.
+
+The network owner is the canonical executable discovered through the existing `DockerHubDiscovery` validation:
+
+```text
+/Applications/Docker.app/Contents/MacOS/com.docker.backend
+```
+
+The helper repeats Docker Desktop discovery on every selected Start. The app persists only `kubernetes-is-selected`, and XPC carries only `kubernetesEnabled`. No kubectl path, cluster identity, backend path, registry list, process selector, or route JSON crosses XPC. `kubectl` is not used as the image-pull routing identity.
+
+Kubernetes V1 uses TCP/443 TLS with one non-rewriting backend sniff followed by exact-host route rules. Each matching route sets `override_address` to the same hostname and routes to `outline`, preserving Outline-side hostname resolution. If Docker Hub and Kubernetes are both selected, they share exactly one `com.docker.backend` sniff; the two deterministic exact-host sets are merged and deduplicated. Docker Hub's bundled-CLI rules remain exclusive to the Docker Hub target.
+
+The fixed Kubernetes host set begins with:
+
+```text
+registry.k8s.io
+cdn.registry.k8s.io
+```
+
+It also contains these 46 exact Google Artifact Registry transport hostnames, generated from the current official regional and multi-regional location catalog documented by [Google Cloud Artifact Registry locations](https://docs.cloud.google.com/artifact-registry/docs/repositories/repo-locations):
+
+```text
+northamerica-northeast1-docker.pkg.dev
+northamerica-northeast2-docker.pkg.dev
+northamerica-south1-docker.pkg.dev
+us-central1-docker.pkg.dev
+us-east1-docker.pkg.dev
+us-east4-docker.pkg.dev
+us-east5-docker.pkg.dev
+us-south1-docker.pkg.dev
+us-west1-docker.pkg.dev
+us-west2-docker.pkg.dev
+us-west3-docker.pkg.dev
+us-west4-docker.pkg.dev
+southamerica-east1-docker.pkg.dev
+southamerica-west1-docker.pkg.dev
+europe-central2-docker.pkg.dev
+europe-north1-docker.pkg.dev
+europe-north2-docker.pkg.dev
+europe-southwest1-docker.pkg.dev
+europe-west1-docker.pkg.dev
+europe-west2-docker.pkg.dev
+europe-west3-docker.pkg.dev
+europe-west4-docker.pkg.dev
+europe-west6-docker.pkg.dev
+europe-west8-docker.pkg.dev
+europe-west9-docker.pkg.dev
+europe-west10-docker.pkg.dev
+europe-west12-docker.pkg.dev
+me-central1-docker.pkg.dev
+me-central2-docker.pkg.dev
+me-west1-docker.pkg.dev
+asia-east1-docker.pkg.dev
+asia-east2-docker.pkg.dev
+asia-northeast1-docker.pkg.dev
+asia-northeast2-docker.pkg.dev
+asia-northeast3-docker.pkg.dev
+asia-south1-docker.pkg.dev
+asia-south2-docker.pkg.dev
+asia-southeast1-docker.pkg.dev
+asia-southeast2-docker.pkg.dev
+asia-southeast3-docker.pkg.dev
+australia-southeast1-docker.pkg.dev
+australia-southeast2-docker.pkg.dev
+africa-south1-docker.pkg.dev
+asia-docker.pkg.dev
+europe-docker.pkg.dev
+us-docker.pkg.dev
+```
+
+There is no `docker.pkg.dev` suffix, wildcard, or regex route, no whole-backend route, and no `override_destination` on the shared sniff. Unmatched backend traffic reaches `final: direct`. Kubernetes V1 adds no UDP/QUIC, plain HTTP, custom-port, IPv6-reject, DNS, Go, sing-box, or patch behavior.
+
+Kubernetes V1 does not guarantee arbitrary workload registries, Docker Hub, GHCR, Quay, legacy GCR, GitLab Registry, ECR, private registries, remote-cluster node pulls, Colima, OrbStack, or unvalidated minikube providers. Docker Hub image pulls remain the responsibility of the independent Docker Hub target. A remote cluster pulls images from its remote nodes, so a local SeparateProxy instance cannot route that transport.
+
+Docker pull, Docker Compose, kind containerd, Docker Desktop Kubernetes, and other Docker Desktop components can all appear on macOS as `com.docker.backend`. sing-box cannot distinguish their VM or container provenance. Therefore any traffic owned by that process and addressed to one of the Kubernetes exact hostnames shares the Kubernetes route, while every unmatched hostname remains Direct.
+
 ## Homebrew target boundary and discovery
 
 Homebrew V1 supports:
@@ -716,7 +797,7 @@ open macOS/SeparateProxy.xcodeproj
 3. locate `SeparateProxy.app` in Products;
 4. copy it to `/Applications` and launch that copy;
 5. save the Outline key;
-6. select one or more targets: Chrome, Codex, Git, Docker Hub, and Homebrew;
+6. select one or more targets: Chrome, Codex, Git, Docker Hub, Kubernetes, and Homebrew;
 7. if Chrome is selected and built-in Google routing is wanted, expand **Website Routing** and enable **Google**;
 8. add optional exact hostnames under **Custom Websites**;
 9. confirm the one-time browser-wide ECH change when Website Routing first requires it;
@@ -743,7 +824,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes backend sniffing, Kubernetes registry exclusions and synthetic target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -1232,6 +1313,7 @@ Chrome -> early browser-wide IPv6 fallback + exact websites + hostname destinati
 Codex  -> exact executable + TLS/443 SNI recovery
 Git    -> exact Apple/Xcode HTTPS helper + TLS/443 SNI recovery
 Docker Hub -> exact bundled backend/CLI + exact TLS/443 hostnames
+Kubernetes -> exact Docker backend + exact official registry TLS/443 hostnames
 Homebrew -> fixed system curl + four exact TLS/443 hosts + scoped github.com self-update
 ```
 
@@ -1262,6 +1344,8 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - Docker backend and CLI hostname classification depends on observable TLS SNI. Missing SNI or an unmatched hostname remains Direct.
 - Docker browser authorization remains a separate Chrome Website Routing concern and may require multiple manually observed exact hostnames.
 - Docker Hub routing has generated-config and offline sing-box validation only; manual runtime A/B evidence has not yet been recorded.
+- Kubernetes V1 supports Docker Desktop-backed local clusters and only the 48 documented official-registry transport hostnames. Arbitrary workload registries, remote-node pulls, Colima, OrbStack, and unvalidated minikube providers remain outside its scope.
+- Kubernetes classification depends on observable TLS SNI from the shared `com.docker.backend` process. It cannot distinguish Docker CLI, Compose, kind, built-in Kubernetes, or other VM/container provenance when they contact the same exact hostname.
 - Homebrew V1 covers only default API metadata, Core bottle transport, and the default brew self-update remote. Arbitrary Cask vendors, source builds, custom taps/mirrors, and custom or brewed curl/Git remain outside its scope.
 - Homebrew curl matching uses the shared `/usr/bin/curl` process boundary. Any caller of that executable accessing the same four exact Homebrew infrastructure hosts shares the Outline route; all other curl hosts remain Direct.
 - Homebrew self-update requires a validated active Apple/Xcode Git HTTPS helper. With the independent Git target disabled, only exact `github.com` is routed for that helper.
@@ -1298,6 +1382,7 @@ Differences from SwiftUI:
 - no Codex discovery/routing;
 - no Git discovery/routing;
 - no Docker Hub discovery/routing;
+- no Kubernetes official-registry routing;
 - no Homebrew discovery/routing;
 - no Chrome DNS Integration management;
 - repo-local config remains after Stop;
@@ -1313,6 +1398,7 @@ Chrome IPv6 is intentionally rejected before hostname routing so Chrome can retr
 Selected Codex integration traffic uses Outline within its documented exact-process boundaries.
 Selected Apple/Xcode Git HTTPS/443 remote transport uses Outline within its documented exact-helper boundary.
 Selected Docker Hub first-party HTTPS traffic uses Outline within its documented exact-process and exact-hostname boundaries.
+Selected Docker Desktop-backed Kubernetes official-registry HTTPS traffic uses Outline within its documented shared-process and exact-hostname boundaries.
 Selected Homebrew Core bottle/update traffic uses Outline within its documented system-curl and scoped Git-helper boundaries.
 ```
 

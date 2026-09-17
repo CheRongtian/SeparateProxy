@@ -228,6 +228,153 @@ final class DockerHubConfigurationTests: XCTestCase {
         }
     }
 
+    func testDockerAndKubernetesDisabledProduceNoDockerBackendRules() throws {
+        let configuration = try existingTargetsConfiguration()
+        let backendPattern = try exactRegex(for: dockerInstallation.backendExecutablePath)
+
+        XCTAssertFalse(
+            configuration.route.rules.contains { $0.processPathRegex == [backendPattern] }
+        )
+    }
+
+    func testKubernetesOnlyGeneratesExactBackendRules() throws {
+        let configuration = try kubernetesOnlyConfiguration()
+        let rules = configuration.route.rules
+
+        XCTAssertEqual(rules.count, KubernetesRoutePolicy.backendHostnames.count + 1)
+        assertSniffRule(
+            rules[0],
+            executablePath: dockerInstallation.backendExecutablePath
+        )
+        for (index, hostname) in KubernetesRoutePolicy.backendHostnames.enumerated() {
+            assertDomainRule(
+                rules[index + 1],
+                executablePath: dockerInstallation.backendExecutablePath,
+                hostname: hostname
+            )
+        }
+        XCTAssertEqual(configuration.route.final, "direct")
+    }
+
+    func testKubernetesArtifactRegistryCatalogIsCompleteAndRepresentative() {
+        XCTAssertEqual(KubernetesRoutePolicy.artifactRegistryLocations.count, 46)
+        XCTAssertEqual(KubernetesRoutePolicy.artifactRegistryHostnames.count, 46)
+        for hostname in [
+            "us-east1-docker.pkg.dev",
+            "us-west1-docker.pkg.dev",
+            "us-central1-docker.pkg.dev",
+            "europe-west1-docker.pkg.dev",
+            "asia-east1-docker.pkg.dev",
+            "us-docker.pkg.dev",
+            "europe-docker.pkg.dev",
+            "asia-docker.pkg.dev",
+        ] {
+            XCTAssertTrue(KubernetesRoutePolicy.artifactRegistryHostnames.contains(hostname))
+        }
+    }
+
+    func testKubernetesRulesExcludeUnrelatedAndLegacyRegistries() throws {
+        let routedDomains = Set(
+            try kubernetesOnlyConfiguration().route.rules.flatMap { $0.domains ?? [] }
+        )
+
+        for excluded in [
+            "example.com",
+            "google.com",
+            "googleapis.com",
+            "googleusercontent.com",
+            "storage.googleapis.com",
+            "ghcr.io",
+            "quay.io",
+            "gcr.io",
+            "k8s.gcr.io",
+            "registry.example.com",
+            "evil-docker.pkg.dev",
+        ] {
+            XCTAssertFalse(routedDomains.contains(excluded))
+        }
+    }
+
+    func testKubernetesRulesUseExactDomainsWithoutWildcardOrDestinationOverride() throws {
+        let configuration = try kubernetesOnlyConfiguration()
+        let json = try XCTUnwrap(
+            String(data: configuration.encodedJSON(), encoding: .utf8)
+        )
+
+        XCTAssertFalse(json.contains("domain_suffix"))
+        XCTAssertFalse(json.contains("domain_regex"))
+        XCTAssertFalse(json.contains("*.docker.pkg.dev"))
+        XCTAssertFalse(json.contains("override_destination"))
+        XCTAssertTrue(configuration.route.rules.allSatisfy { $0.network == "tcp" })
+        XCTAssertTrue(configuration.route.rules.allSatisfy { $0.destinationPort == 443 })
+    }
+
+    func testDockerAndKubernetesShareOneBackendSniffAndDeterministicUnion() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            dockerHubInstallation: dockerInstallation,
+            kubernetesInstallation: dockerInstallation
+        )
+        let backendPattern = try exactRegex(for: dockerInstallation.backendExecutablePath)
+        let backendRules = configuration.route.rules.filter {
+            $0.processPathRegex == [backendPattern]
+        }
+        let backendSniffs = backendRules.filter { $0.action == "sniff" }
+        let routedDomains = backendRules.flatMap { $0.domains ?? [] }
+        let expectedDomains = DockerHubRoutePolicy.backendHostnames
+            + KubernetesRoutePolicy.backendHostnames
+
+        XCTAssertEqual(backendSniffs.count, 1)
+        XCTAssertEqual(routedDomains, expectedDomains)
+        XCTAssertEqual(Set(routedDomains).count, routedDomains.count)
+        XCTAssertEqual(
+            configuration.route.rules.count,
+            1 + expectedDomains.count + 1 + DockerHubRoutePolicy.cliHostnames.count
+        )
+    }
+
+    func testKubernetesOnlyDoesNotGenerateDockerCLIRules() throws {
+        let configuration = try kubernetesOnlyConfiguration()
+        let cliPattern = try exactRegex(for: dockerInstallation.cliExecutablePath)
+
+        XCTAssertFalse(
+            configuration.route.rules.contains { $0.processPathRegex == [cliPattern] }
+        )
+    }
+
+    func testKubernetesRulesDoNotChangeOtherTargetRules() throws {
+        let baseline = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: chromePath,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation,
+            homebrewEnabled: true,
+            proxyWebsiteHostnames: ["chatgpt.com"]
+        )
+        let combined = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: chromePath,
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation,
+            kubernetesInstallation: dockerInstallation,
+            homebrewEnabled: true,
+            proxyWebsiteHostnames: ["chatgpt.com"]
+        )
+        let backendPattern = try exactRegex(for: dockerInstallation.backendExecutablePath)
+        let combinedWithoutKubernetes = combined.route.rules.filter {
+            $0.processPathRegex != [backendPattern]
+        }
+
+        XCTAssertEqual(combinedWithoutKubernetes, baseline.route.rules)
+        XCTAssertEqual(combined.route.final, baseline.route.final)
+        XCTAssertEqual(combined.experimental, baseline.experimental)
+    }
+
     func testSyntheticDockerHubConfigurationPassesBundledSingBoxCheck() throws {
         let configuration = try dockerOnlyConfiguration()
         let temporaryURL = FileManager.default.temporaryDirectory
@@ -253,6 +400,60 @@ final class DockerHubConfigurationTests: XCTestCase {
             encoding: .utf8
         ) ?? ""
         XCTAssertEqual(process.terminationStatus, 0, message)
+    }
+
+    func testSyntheticKubernetesCombinationsPassBundledSingBoxCheck() throws {
+        let configurations = [
+            try kubernetesOnlyConfiguration(),
+            try dockerOnlyConfiguration(),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: nil,
+                vsCodePluginHelperExecutablePath: nil,
+                dockerHubInstallation: dockerInstallation,
+                kubernetesInstallation: dockerInstallation
+            ),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: nil,
+                vsCodePluginHelperExecutablePath: nil,
+                kubernetesInstallation: dockerInstallation,
+                homebrewEnabled: true,
+                homebrewGitInstallation: gitInstallation
+            ),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: nil,
+                vsCodePluginHelperExecutablePath: nil,
+                gitInstallation: gitInstallation,
+                kubernetesInstallation: dockerInstallation
+            ),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: codexPath,
+                vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+                kubernetesInstallation: dockerInstallation
+            ),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: chromePath,
+                codexExecutablePath: nil,
+                vsCodePluginHelperExecutablePath: nil,
+                kubernetesInstallation: dockerInstallation,
+                proxyWebsiteHostnames: ["chatgpt.com"]
+            ),
+        ]
+
+        for (index, configuration) in configurations.enumerated() {
+            try assertPassesBundledSingBoxCheck(
+                configuration,
+                name: "Kubernetes-\(index)"
+            )
+        }
     }
 
     private var dockerInstallation: DockerHubInstallation {
@@ -282,6 +483,47 @@ final class DockerHubConfigurationTests: XCTestCase {
             vsCodePluginHelperExecutablePath: nil,
             dockerHubInstallation: dockerInstallation
         )
+    }
+
+    private func kubernetesOnlyConfiguration() throws -> SingBoxConfiguration {
+        try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            kubernetesInstallation: dockerInstallation
+        )
+    }
+
+    private func assertPassesBundledSingBoxCheck(
+        _ configuration: SingBoxConfiguration,
+        name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SeparateProxy-\(name)-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try configuration.encodedJSON().write(to: temporaryURL, options: .atomic)
+
+        let projectURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = projectURL.appendingPathComponent("bin/sing-box")
+        process.arguments = ["check", "-c", temporaryURL.path]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let message = String(
+            data: output.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, message, file: file, line: line)
     }
 
     private func assertSniffRule(
