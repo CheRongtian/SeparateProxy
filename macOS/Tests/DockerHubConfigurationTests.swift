@@ -228,13 +228,15 @@ final class DockerHubConfigurationTests: XCTestCase {
         }
     }
 
-    func testDockerAndKubernetesDisabledProduceNoDockerBackendRules() throws {
+    func testDockerKubernetesAndContainerRegistriesDisabledProduceNoBackendRules() throws {
         let configuration = try existingTargetsConfiguration()
         let backendPattern = try exactRegex(for: dockerInstallation.backendExecutablePath)
+        let routedDomains = configuration.route.rules.flatMap { $0.domains ?? [] }
 
         XCTAssertFalse(
             configuration.route.rules.contains { $0.processPathRegex == [backendPattern] }
         )
+        XCTAssertFalse(routedDomains.contains("gcr.io"))
     }
 
     func testKubernetesOnlyGeneratesExactBackendRules() throws {
@@ -375,6 +377,117 @@ final class DockerHubConfigurationTests: XCTestCase {
         XCTAssertEqual(combined.experimental, baseline.experimental)
     }
 
+    func testContainerRegistriesOnlyGeneratesExactGCRRoute() throws {
+        let configuration = try containerRegistriesOnlyConfiguration()
+        let rules = configuration.route.rules
+
+        XCTAssertEqual(rules.count, 2)
+        assertSniffRule(
+            rules[0],
+            executablePath: dockerInstallation.backendExecutablePath
+        )
+        assertDomainRule(
+            rules[1],
+            executablePath: dockerInstallation.backendExecutablePath,
+            hostname: "gcr.io"
+        )
+        XCTAssertEqual(configuration.route.final, "direct")
+    }
+
+    func testContainerRegistriesUsesOnlyExactGCRHostname() throws {
+        let configuration = try containerRegistriesOnlyConfiguration()
+        let routedDomains = configuration.route.rules.flatMap { $0.domains ?? [] }
+        let json = try XCTUnwrap(
+            String(data: configuration.encodedJSON(), encoding: .utf8)
+        )
+
+        XCTAssertEqual(routedDomains, ["gcr.io"])
+        for excluded in [
+            "foo.gcr.io",
+            "us.gcr.io",
+            "eu.gcr.io",
+            "asia.gcr.io",
+            "storage.googleapis.com",
+            "googleapis.com",
+            "googleusercontent.com",
+            "ghcr.io",
+            "quay.io",
+            "registry.k8s.io",
+            "example.com",
+        ] {
+            XCTAssertFalse(routedDomains.contains(excluded))
+        }
+        XCTAssertFalse(json.contains("domain_suffix"))
+        XCTAssertFalse(json.contains("domain_regex"))
+        XCTAssertFalse(json.contains("*.gcr.io"))
+        XCTAssertFalse(json.contains("override_destination"))
+    }
+
+    func testContainerRegistriesCombinationsShareOneBackendSniff() throws {
+        let cases: [(SingBoxConfiguration, [String], Bool)] = [
+            (
+                try SingBoxConfigurationBuilder.make(
+                    outline: outline,
+                    chromeBundlePath: nil,
+                    codexExecutablePath: nil,
+                    vsCodePluginHelperExecutablePath: nil,
+                    dockerHubInstallation: dockerInstallation,
+                    containerRegistriesInstallation: dockerInstallation
+                ),
+                DockerHubRoutePolicy.backendHostnames
+                    + ContainerRegistriesRoutePolicy.backendHostnames,
+                true
+            ),
+            (
+                try SingBoxConfigurationBuilder.make(
+                    outline: outline,
+                    chromeBundlePath: nil,
+                    codexExecutablePath: nil,
+                    vsCodePluginHelperExecutablePath: nil,
+                    kubernetesInstallation: dockerInstallation,
+                    containerRegistriesInstallation: dockerInstallation
+                ),
+                KubernetesRoutePolicy.backendHostnames
+                    + ContainerRegistriesRoutePolicy.backendHostnames,
+                false
+            ),
+            (
+                try SingBoxConfigurationBuilder.make(
+                    outline: outline,
+                    chromeBundlePath: nil,
+                    codexExecutablePath: nil,
+                    vsCodePluginHelperExecutablePath: nil,
+                    dockerHubInstallation: dockerInstallation,
+                    kubernetesInstallation: dockerInstallation,
+                    containerRegistriesInstallation: dockerInstallation
+                ),
+                DockerHubRoutePolicy.backendHostnames
+                    + KubernetesRoutePolicy.backendHostnames
+                    + ContainerRegistriesRoutePolicy.backendHostnames,
+                true
+            ),
+        ]
+        let backendPattern = try exactRegex(for: dockerInstallation.backendExecutablePath)
+        let cliPattern = try exactRegex(for: dockerInstallation.cliExecutablePath)
+
+        for (configuration, expectedDomains, expectsDockerCLI) in cases {
+            let backendRules = configuration.route.rules.filter {
+                $0.processPathRegex == [backendPattern]
+            }
+            let backendSniffs = backendRules.filter { $0.action == "sniff" }
+            let routedDomains = backendRules.flatMap { $0.domains ?? [] }
+            let hasDockerCLIRules = configuration.route.rules.contains {
+                $0.processPathRegex == [cliPattern]
+            }
+
+            XCTAssertEqual(backendSniffs.count, 1)
+            XCTAssertEqual(routedDomains, expectedDomains)
+            XCTAssertEqual(Set(routedDomains).count, routedDomains.count)
+            XCTAssertEqual(hasDockerCLIRules, expectsDockerCLI)
+            XCTAssertEqual(configuration.route.final, "direct")
+        }
+    }
+
     func testSyntheticDockerHubConfigurationPassesBundledSingBoxCheck() throws {
         let configuration = try dockerOnlyConfiguration()
         let temporaryURL = FileManager.default.temporaryDirectory
@@ -456,6 +569,44 @@ final class DockerHubConfigurationTests: XCTestCase {
         }
     }
 
+    func testSyntheticContainerRegistriesCombinationsPassBundledSingBoxCheck() throws {
+        let configurations = [
+            try containerRegistriesOnlyConfiguration(),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: nil,
+                vsCodePluginHelperExecutablePath: nil,
+                dockerHubInstallation: dockerInstallation,
+                containerRegistriesInstallation: dockerInstallation
+            ),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: nil,
+                vsCodePluginHelperExecutablePath: nil,
+                kubernetesInstallation: dockerInstallation,
+                containerRegistriesInstallation: dockerInstallation
+            ),
+            try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: nil,
+                codexExecutablePath: nil,
+                vsCodePluginHelperExecutablePath: nil,
+                dockerHubInstallation: dockerInstallation,
+                kubernetesInstallation: dockerInstallation,
+                containerRegistriesInstallation: dockerInstallation
+            ),
+        ]
+
+        for (index, configuration) in configurations.enumerated() {
+            try assertPassesBundledSingBoxCheck(
+                configuration,
+                name: "ContainerRegistries-\(index)"
+            )
+        }
+    }
+
     private var dockerInstallation: DockerHubInstallation {
         DockerHubInstallation(
             applicationBundlePath: "/Applications/Docker Desktop (Stable).app",
@@ -492,6 +643,16 @@ final class DockerHubConfigurationTests: XCTestCase {
             codexExecutablePath: nil,
             vsCodePluginHelperExecutablePath: nil,
             kubernetesInstallation: dockerInstallation
+        )
+    }
+
+    private func containerRegistriesOnlyConfiguration() throws -> SingBoxConfiguration {
+        try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            containerRegistriesInstallation: dockerInstallation
         )
     }
 

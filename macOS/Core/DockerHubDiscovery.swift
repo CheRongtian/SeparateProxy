@@ -107,6 +107,12 @@ public enum KubernetesRoutePolicy {
     ] + artifactRegistryHostnames
 }
 
+public enum ContainerRegistriesRoutePolicy {
+    public static let backendHostnames = [
+        "gcr.io",
+    ]
+}
+
 public struct DockerHubDiscovery {
     public static let applicationBundleIdentifier = "com.docker.docker"
     public static let backendExecutableRelativePath = "Contents/MacOS/com.docker.backend"

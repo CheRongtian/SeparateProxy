@@ -52,6 +52,14 @@ final class ProxyViewModel: ObservableObject {
             )
         }
     }
+    @Published var containerRegistriesIsSelected: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                containerRegistriesIsSelected,
+                forKey: Self.containerRegistriesSelectionKey
+            )
+        }
+    }
     @Published var homebrewIsSelected: Bool {
         didSet {
             UserDefaults.standard.set(
@@ -69,6 +77,7 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var gitTargetState: GitTargetState = .notFound
     @Published private(set) var dockerHubTargetState: DockerHubTargetState = .notFound
     @Published private(set) var kubernetesTargetState: DockerHubTargetState = .notFound
+    @Published private(set) var containerRegistriesTargetState: DockerHubTargetState = .notFound
     @Published private(set) var homebrewTargetState: HomebrewTargetState = .notFound
     @Published private(set) var vsCodeBundleURL: URL?
     @Published private(set) var state: ProxyState = .helperNotInstalled {
@@ -91,6 +100,7 @@ final class ProxyViewModel: ObservableObject {
     private static let gitSelectionKey = "git-is-selected"
     private static let dockerHubSelectionKey = "docker-is-selected"
     private static let kubernetesSelectionKey = "kubernetes-is-selected"
+    private static let containerRegistriesSelectionKey = "container-registries-is-selected"
     private static let homebrewSelectionKey = "homebrew-is-selected"
     private static let proxyWebsiteHostnamesKey = "proxy-website-hostnames"
     private let keychain = KeychainStore()
@@ -119,6 +129,9 @@ final class ProxyViewModel: ObservableObject {
         gitIsSelected = UserDefaults.standard.bool(forKey: Self.gitSelectionKey)
         dockerHubIsSelected = UserDefaults.standard.bool(forKey: Self.dockerHubSelectionKey)
         kubernetesIsSelected = UserDefaults.standard.bool(forKey: Self.kubernetesSelectionKey)
+        containerRegistriesIsSelected = UserDefaults.standard.bool(
+            forKey: Self.containerRegistriesSelectionKey
+        )
         homebrewIsSelected = UserDefaults.standard.bool(forKey: Self.homebrewSelectionKey)
         let storedHostnames = UserDefaults.standard.stringArray(
             forKey: Self.proxyWebsiteHostnamesKey
@@ -136,12 +149,14 @@ final class ProxyViewModel: ObservableObject {
             || gitIsSelected
             || dockerHubIsSelected
             || kubernetesIsSelected
+            || containerRegistriesIsSelected
             || homebrewIsSelected
         let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
             && (!codexIsSelected || (codexTargetState.canSelect && vsCodeBundleURL != nil))
             && (!gitIsSelected || gitTargetState.canSelect)
             && (!dockerHubIsSelected || dockerHubTargetState.canSelect)
             && (!kubernetesIsSelected || kubernetesTargetState.canSelect)
+            && (!containerRegistriesIsSelected || containerRegistriesTargetState.canSelect)
             && (!homebrewIsSelected || homebrewTargetState.canSelect)
         return canRetry
             && helperService.status == .enabled
@@ -432,6 +447,7 @@ final class ProxyViewModel: ObservableObject {
             || gitIsSelected
             || dockerHubIsSelected
             || kubernetesIsSelected
+            || containerRegistriesIsSelected
             || homebrewIsSelected else {
             state = .error
             message = SingBoxConfigurationError.noTargetsSelected.localizedDescription
@@ -468,6 +484,11 @@ final class ProxyViewModel: ObservableObject {
         if kubernetesIsSelected, !kubernetesTargetState.canSelect {
             state = .error
             message = "Kubernetes official registry support is unavailable."
+            return
+        }
+        if containerRegistriesIsSelected, !containerRegistriesTargetState.canSelect {
+            state = .error
+            message = "Container Registries support is unavailable."
             return
         }
         if homebrewIsSelected, !homebrewTargetState.canSelect {
@@ -523,6 +544,7 @@ final class ProxyViewModel: ObservableObject {
                 gitEnabled: gitIsSelected,
                 dockerEnabled: dockerHubIsSelected,
                 kubernetesEnabled: kubernetesIsSelected,
+                containerRegistriesEnabled: containerRegistriesIsSelected,
                 homebrewEnabled: homebrewIsSelected,
                 vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : "",
                 proxyWebsiteHostnames: effectiveProxyWebsiteHostnames
@@ -563,6 +585,7 @@ final class ProxyViewModel: ObservableObject {
         let dockerDesktopTargetState = DockerHubTargetDiscovery.discover()
         dockerHubTargetState = dockerDesktopTargetState
         kubernetesTargetState = dockerDesktopTargetState
+        containerRegistriesTargetState = dockerDesktopTargetState
         homebrewTargetState = HomebrewTargetDiscovery.discover()
         if !codexTargetState.canSelect {
             codexIsSelected = false
@@ -575,6 +598,9 @@ final class ProxyViewModel: ObservableObject {
         }
         if !kubernetesTargetState.canSelect {
             kubernetesIsSelected = false
+        }
+        if !containerRegistriesTargetState.canSelect {
+            containerRegistriesIsSelected = false
         }
         if !homebrewTargetState.canSelect {
             homebrewIsSelected = false

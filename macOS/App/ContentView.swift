@@ -11,6 +11,7 @@ protocol ProxyViewModeling: ObservableObject {
     var gitIsSelected: Bool { get set }
     var dockerHubIsSelected: Bool { get set }
     var kubernetesIsSelected: Bool { get set }
+    var containerRegistriesIsSelected: Bool { get set }
     var homebrewIsSelected: Bool { get set }
     var proxyWebsiteInput: String { get set }
     var proxyWebsiteHostnames: [String] { get }
@@ -21,6 +22,7 @@ protocol ProxyViewModeling: ObservableObject {
     var gitTargetState: GitTargetState { get }
     var dockerHubTargetState: DockerHubTargetState { get }
     var kubernetesTargetState: DockerHubTargetState { get }
+    var containerRegistriesTargetState: DockerHubTargetState { get }
     var homebrewTargetState: HomebrewTargetState { get }
     var state: ProxyState { get }
     var message: String { get }
@@ -490,6 +492,19 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
                 Divider()
 
                 TargetRow(
+                    title: "Container Registries",
+                    subtitle: "Google Container Registry",
+                    systemImage: "server.rack",
+                    status: viewModel.containerRegistriesTargetState.label,
+                    statusSystemImage: containerRegistriesStatusIcon,
+                    statusColor: containerRegistriesStatusColor,
+                    isOn: $viewModel.containerRegistriesIsSelected,
+                    isEnabled: viewModel.containerRegistriesTargetState.canSelect
+                )
+
+                Divider()
+
+                TargetRow(
                     title: "Homebrew",
                     subtitle: viewModel.homebrewTargetState.detail,
                     systemImage: "archivebox",
@@ -649,6 +664,26 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
 
     private var kubernetesStatusIcon: String {
         switch viewModel.kubernetesTargetState {
+        case .installed:
+            return "checkmark.circle.fill"
+        case .notFound:
+            return "minus.circle"
+        case .unsupported:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var containerRegistriesStatusColor: Color {
+        switch viewModel.containerRegistriesTargetState {
+        case .installed:
+            return .green
+        case .notFound, .unsupported:
+            return .orange
+        }
+    }
+
+    private var containerRegistriesStatusIcon: String {
+        switch viewModel.containerRegistriesTargetState {
         case .installed:
             return "checkmark.circle.fill"
         case .notFound:
@@ -952,6 +987,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
     @Published var gitIsSelected = true
     @Published var dockerHubIsSelected = true
     @Published var kubernetesIsSelected = true
+    @Published var containerRegistriesIsSelected = true
     @Published var homebrewIsSelected = true
     @Published var proxyWebsiteInput = ""
     @Published var proxyWebsiteHostnames = ["chatgpt.com", "github.com"]
@@ -962,6 +998,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
     @Published var gitTargetState = PreviewProxyFixtures.gitInstalled
     @Published var dockerHubTargetState = PreviewProxyFixtures.dockerInstalled
     @Published var kubernetesTargetState = PreviewProxyFixtures.dockerInstalled
+    @Published var containerRegistriesTargetState = PreviewProxyFixtures.dockerInstalled
     @Published var homebrewTargetState = PreviewProxyFixtures.homebrewInstalled
     @Published var state: ProxyState = .running
     @Published var message = "The proxy is running. PID: 57546."
@@ -990,11 +1027,13 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
             gitIsSelected = false
             dockerHubIsSelected = false
             kubernetesIsSelected = false
+            containerRegistriesIsSelected = false
             homebrewIsSelected = false
             codexTargetState = .notInstalled
             gitTargetState = .notFound
             dockerHubTargetState = .notFound
             kubernetesTargetState = .notFound
+            containerRegistriesTargetState = .notFound
             homebrewTargetState = .notFound
             state = .stopped
             message = "Some developer tools are unavailable on this Mac."
@@ -1012,12 +1051,14 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
             || gitIsSelected
             || dockerHubIsSelected
             || kubernetesIsSelected
+            || containerRegistriesIsSelected
             || homebrewIsSelected
         let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
             && (!codexIsSelected || codexTargetState.canSelect)
             && (!gitIsSelected || gitTargetState.canSelect)
             && (!dockerHubIsSelected || dockerHubTargetState.canSelect)
             && (!kubernetesIsSelected || kubernetesTargetState.canSelect)
+            && (!containerRegistriesIsSelected || containerRegistriesTargetState.canSelect)
             && (!homebrewIsSelected || homebrewTargetState.canSelect)
         return canRetry && keyIsSaved && hasSelection && selectedTargetsAreAvailable
     }

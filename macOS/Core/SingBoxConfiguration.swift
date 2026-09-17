@@ -229,6 +229,7 @@ public enum SingBoxConfigurationBuilder {
         gitInstallation: AppleGitInstallation? = nil,
         dockerHubInstallation: DockerHubInstallation? = nil,
         kubernetesInstallation: DockerHubInstallation? = nil,
+        containerRegistriesInstallation: DockerHubInstallation? = nil,
         homebrewEnabled: Bool = false,
         homebrewGitInstallation: AppleGitInstallation? = nil,
         proxyWebsiteHostnames: [String] = []
@@ -238,6 +239,7 @@ public enum SingBoxConfigurationBuilder {
             || gitInstallation != nil
             || dockerHubInstallation != nil
             || kubernetesInstallation != nil
+            || containerRegistriesInstallation != nil
             || homebrewEnabled else {
             throw SingBoxConfigurationError.noTargetsSelected
         }
@@ -261,10 +263,13 @@ public enum SingBoxConfigurationBuilder {
         if let gitInstallation {
             additionalRules += try makeGitRules(installation: gitInstallation)
         }
-        if dockerHubInstallation != nil || kubernetesInstallation != nil {
+        if dockerHubInstallation != nil
+            || kubernetesInstallation != nil
+            || containerRegistriesInstallation != nil {
             additionalRules += try makeDockerRoutingRules(
                 dockerHubInstallation: dockerHubInstallation,
-                kubernetesInstallation: kubernetesInstallation
+                kubernetesInstallation: kubernetesInstallation,
+                containerRegistriesInstallation: containerRegistriesInstallation
             )
         }
         if homebrewEnabled {
@@ -573,15 +578,19 @@ public enum SingBoxConfigurationBuilder {
 
     private static func makeDockerRoutingRules(
         dockerHubInstallation: DockerHubInstallation?,
-        kubernetesInstallation: DockerHubInstallation?
+        kubernetesInstallation: DockerHubInstallation?,
+        containerRegistriesInstallation: DockerHubInstallation?
     ) throws -> [SingBoxConfiguration.Route.Rule] {
-        if let dockerHubInstallation,
-           let kubernetesInstallation,
-           dockerHubInstallation != kubernetesInstallation {
-            throw SingBoxConfigurationError.invalidDockerHubInstallation
-        }
-        guard let installation = dockerHubInstallation ?? kubernetesInstallation else {
+        let installations = [
+            dockerHubInstallation,
+            kubernetesInstallation,
+            containerRegistriesInstallation,
+        ].compactMap { $0 }
+        guard let installation = installations.first else {
             return []
+        }
+        guard installations.allSatisfy({ $0 == installation }) else {
+            throw SingBoxConfigurationError.invalidDockerHubInstallation
         }
         let bundleURL = URL(fileURLWithPath: installation.applicationBundlePath)
             .standardizedFileURL
@@ -617,6 +626,9 @@ public enum SingBoxConfigurationBuilder {
         }
         if kubernetesInstallation != nil {
             backendHostnames += KubernetesRoutePolicy.backendHostnames
+        }
+        if containerRegistriesInstallation != nil {
+            backendHostnames += ContainerRegistriesRoutePolicy.backendHostnames
         }
         var seenBackendHostnames = Set<String>()
         backendHostnames = backendHostnames.filter {

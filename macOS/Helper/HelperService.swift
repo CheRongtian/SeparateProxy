@@ -38,6 +38,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         gitEnabled: Bool,
         dockerEnabled: Bool,
         kubernetesEnabled: Bool,
+        containerRegistriesEnabled: Bool,
         homebrewEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
@@ -68,7 +69,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                     try AppleGitDiscovery().discoverActiveInstallation()
                 }
                 let dockerHubInstallation = try DockerHubDiscovery.resolveIfEnabled(
-                    dockerEnabled || kubernetesEnabled
+                    dockerEnabled || kubernetesEnabled || containerRegistriesEnabled
                 ) {
                     try DockerHubDiscovery {
                         NSWorkspace.shared.urlForApplication(
@@ -93,7 +94,12 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                 let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
                     .validateEffectiveNormalizedList(proxyWebsiteHostnames)
                 let configuration: SingBoxConfiguration
-                if codexEnabled || gitEnabled || dockerEnabled || kubernetesEnabled || homebrewEnabled {
+                if codexEnabled
+                    || gitEnabled
+                    || dockerEnabled
+                    || kubernetesEnabled
+                    || containerRegistriesEnabled
+                    || homebrewEnabled {
                     configuration = try SingBoxConfigurationBuilder.make(
                         outline: outline,
                         chromeBundlePath: validatedChromePath,
@@ -102,6 +108,9 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         gitInstallation: gitInstallation,
                         dockerHubInstallation: dockerEnabled ? dockerHubInstallation : nil,
                         kubernetesInstallation: kubernetesEnabled ? dockerHubInstallation : nil,
+                        containerRegistriesInstallation: containerRegistriesEnabled
+                            ? dockerHubInstallation
+                            : nil,
                         homebrewEnabled: homebrewInstallation != nil,
                         homebrewGitInstallation: homebrewGitInstallation,
                         proxyWebsiteHostnames: validatedProxyWebsiteHostnames

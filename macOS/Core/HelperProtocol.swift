@@ -54,6 +54,7 @@ public enum TrafficAccountingReplyKey {
         gitEnabled: Bool,
         dockerEnabled: Bool,
         kubernetesEnabled: Bool,
+        containerRegistriesEnabled: Bool,
         homebrewEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],

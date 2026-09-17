@@ -34,6 +34,7 @@ final class HelperClient {
         gitEnabled: Bool,
         dockerEnabled: Bool,
         kubernetesEnabled: Bool,
+        containerRegistriesEnabled: Bool,
         homebrewEnabled: Bool,
         vsCodeBundlePath: String,
         proxyWebsiteHostnames: [String],
@@ -47,6 +48,7 @@ final class HelperClient {
                 gitEnabled: gitEnabled,
                 dockerEnabled: dockerEnabled,
                 kubernetesEnabled: kubernetesEnabled,
+                containerRegistriesEnabled: containerRegistriesEnabled,
                 homebrewEnabled: homebrewEnabled,
                 vsCodeBundlePath: vsCodeBundlePath,
                 proxyWebsiteHostnames: proxyWebsiteHostnames
