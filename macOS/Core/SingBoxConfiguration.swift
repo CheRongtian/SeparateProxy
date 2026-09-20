@@ -152,7 +152,7 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
         case .invalidGitHelperPaths:
             return "The Git HTTPS helper paths are invalid."
         case .invalidDockerHubInstallation:
-            return "The Docker Hub executable paths are invalid."
+            return "The Docker Desktop executable paths are invalid."
         case .noTargetsSelected:
             return "Select at least one proxy target."
         }
@@ -165,20 +165,10 @@ public enum SingBoxConfigurationBuilder {
         chromeBundlePath: String,
         proxyWebsiteHostnames: [String] = []
     ) throws -> SingBoxConfiguration {
-        guard chromeBundlePath.hasPrefix("/"),
-              chromeBundlePath.hasSuffix(".app"),
-              !chromeBundlePath.contains("\n"),
-              !chromeBundlePath.contains("\0") else {
-            throw SingBoxConfigurationError.invalidChromeBundlePath
-        }
-
-        let normalizedPath = URL(fileURLWithPath: chromeBundlePath)
-            .standardizedFileURL.path
-        let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
-            .replacingOccurrences(of: #"\/"#, with: "/")
-        let chromeRegex = "^\(escapedPath)/"
-        let normalizedWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
-            .validateEffectiveNormalizedList(proxyWebsiteHostnames)
+        let chromeRules = try makeChromeRules(
+            chromeBundlePath: chromeBundlePath,
+            proxyWebsiteHostnames: proxyWebsiteHostnames
+        )
 
         return SingBoxConfiguration(
             log: .init(level: "info", timestamp: true),
@@ -209,14 +199,7 @@ public enum SingBoxConfigurationBuilder {
                     password: outline.password
                 )
             ],
-            route: .init(
-                autoDetectInterface: true,
-                rules: appendingDirectIPv6FallbackRule(to: makeChromeRules(
-                    chromeRegex: chromeRegex,
-                    proxyWebsiteHostnames: normalizedWebsiteHostnames
-                )),
-                final: "direct"
-            ),
+            route: makeRoute(explicitRules: chromeRules),
             experimental: trafficAccountingConfiguration
         )
     }
@@ -228,8 +211,8 @@ public enum SingBoxConfigurationBuilder {
         vsCodePluginHelperExecutablePath: String?,
         gitInstallation: AppleGitInstallation? = nil,
         dockerHubInstallation: DockerHubInstallation? = nil,
-        kubernetesInstallation: DockerHubInstallation? = nil,
-        containerRegistriesInstallation: DockerHubInstallation? = nil,
+        kubernetesInstallation: DockerDesktopBackendInstallation? = nil,
+        containerRegistriesInstallation: DockerDesktopBackendInstallation? = nil,
         homebrewEnabled: Bool = false,
         homebrewGitInstallation: AppleGitInstallation? = nil,
         proxyWebsiteHostnames: [String] = []
@@ -287,17 +270,18 @@ public enum SingBoxConfigurationBuilder {
             guard !additionalRules.isEmpty else {
                 return chromeConfiguration
             }
-            var combinedRules = chromeConfiguration.route.rules
-            combinedRules.removeLast()
+            var combinedRules = try makeChromeRules(
+                chromeBundlePath: chromeBundlePath,
+                proxyWebsiteHostnames: proxyWebsiteHostnames
+            )
             combinedRules.append(contentsOf: additionalRules)
-            combinedRules.append(makeDirectIPv6FallbackRule())
             return SingBoxConfiguration(
                 log: chromeConfiguration.log,
                 inbounds: chromeConfiguration.inbounds,
                 outbounds: chromeConfiguration.outbounds,
-                route: .init(
+                route: makeRoute(
+                    explicitRules: combinedRules,
                     autoDetectInterface: chromeConfiguration.route.autoDetectInterface,
-                    rules: combinedRules,
                     final: chromeConfiguration.route.final
                 ),
                 experimental: chromeConfiguration.experimental
@@ -333,11 +317,7 @@ public enum SingBoxConfigurationBuilder {
                     password: outline.password
                 )
             ],
-            route: .init(
-                autoDetectInterface: true,
-                rules: appendingDirectIPv6FallbackRule(to: additionalRules),
-                final: "direct"
-            ),
+            route: makeRoute(explicitRules: additionalRules),
             experimental: trafficAccountingConfiguration
         )
     }
@@ -348,6 +328,30 @@ public enum SingBoxConfigurationBuilder {
             socketPath: TrafficAccountingConstants.socketPath
         )
     )
+
+    private static func makeChromeRules(
+        chromeBundlePath: String,
+        proxyWebsiteHostnames: [String]
+    ) throws -> [SingBoxConfiguration.Route.Rule] {
+        guard chromeBundlePath.hasPrefix("/"),
+              chromeBundlePath.hasSuffix(".app"),
+              !chromeBundlePath.contains("\n"),
+              !chromeBundlePath.contains("\0") else {
+            throw SingBoxConfigurationError.invalidChromeBundlePath
+        }
+
+        let normalizedPath = URL(fileURLWithPath: chromeBundlePath)
+            .standardizedFileURL.path
+        let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
+            .replacingOccurrences(of: #"\/"#, with: "/")
+        let chromeRegex = "^\(escapedPath)/"
+        let normalizedWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
+            .validateEffectiveNormalizedList(proxyWebsiteHostnames)
+        return makeChromeRules(
+            chromeRegex: chromeRegex,
+            proxyWebsiteHostnames: normalizedWebsiteHostnames
+        )
+    }
 
     private static func makeChromeRules(
         chromeRegex: String,
@@ -408,10 +412,18 @@ public enum SingBoxConfigurationBuilder {
         return rules
     }
 
-    private static func appendingDirectIPv6FallbackRule(
-        to rules: [SingBoxConfiguration.Route.Rule]
-    ) -> [SingBoxConfiguration.Route.Rule] {
-        rules + [makeDirectIPv6FallbackRule()]
+    private static func makeRoute(
+        explicitRules: [SingBoxConfiguration.Route.Rule],
+        autoDetectInterface: Bool = true,
+        final: String = "direct"
+    ) -> SingBoxConfiguration.Route {
+        var rules = explicitRules
+        rules.append(makeDirectIPv6FallbackRule())
+        return .init(
+            autoDetectInterface: autoDetectInterface,
+            rules: rules,
+            final: final
+        )
     }
 
     private static func makeDirectIPv6FallbackRule() -> SingBoxConfiguration.Route.Rule {
@@ -597,11 +609,11 @@ public enum SingBoxConfigurationBuilder {
 
     private static func makeDockerRoutingRules(
         dockerHubInstallation: DockerHubInstallation?,
-        kubernetesInstallation: DockerHubInstallation?,
-        containerRegistriesInstallation: DockerHubInstallation?
+        kubernetesInstallation: DockerDesktopBackendInstallation?,
+        containerRegistriesInstallation: DockerDesktopBackendInstallation?
     ) throws -> [SingBoxConfiguration.Route.Rule] {
         let installations = [
-            dockerHubInstallation,
+            dockerHubInstallation?.backendInstallation,
             kubernetesInstallation,
             containerRegistriesInstallation,
         ].compactMap { $0 }
@@ -615,28 +627,38 @@ public enum SingBoxConfigurationBuilder {
             .standardizedFileURL
         let backendURL = URL(fileURLWithPath: installation.backendExecutablePath)
             .standardizedFileURL
-        let cliURL = URL(fileURLWithPath: installation.cliExecutablePath)
-            .standardizedFileURL
         let expectedBackendURL = bundleURL
             .appendingPathComponent(DockerHubDiscovery.backendExecutableRelativePath)
-            .standardizedFileURL
-        let expectedCLIURL = bundleURL
-            .appendingPathComponent(DockerHubDiscovery.cliExecutableRelativePath)
             .standardizedFileURL
 
         guard installation.applicationBundlePath.hasPrefix("/"),
               bundleURL.pathExtension == "app",
               backendURL == expectedBackendURL,
-              cliURL == expectedCLIURL,
               backendURL.lastPathComponent == "com.docker.backend",
-              cliURL.lastPathComponent == "docker",
               !installation.applicationBundlePath.contains("\n"),
               !installation.applicationBundlePath.contains("\0"),
               !installation.backendExecutablePath.contains("\n"),
-              !installation.backendExecutablePath.contains("\0"),
-              !installation.cliExecutablePath.contains("\n"),
-              !installation.cliExecutablePath.contains("\0") else {
+              !installation.backendExecutablePath.contains("\0") else {
             throw SingBoxConfigurationError.invalidDockerHubInstallation
+        }
+
+        let cliURL: URL?
+        if let dockerHubInstallation {
+            let candidate = URL(fileURLWithPath: dockerHubInstallation.cliExecutablePath)
+                .standardizedFileURL
+            let expectedCLIURL = bundleURL
+                .appendingPathComponent(DockerHubDiscovery.cliExecutableRelativePath)
+                .standardizedFileURL
+            guard dockerHubInstallation.backendInstallation == installation,
+                  candidate == expectedCLIURL,
+                  candidate.lastPathComponent == "docker",
+                  !dockerHubInstallation.cliExecutablePath.contains("\n"),
+                  !dockerHubInstallation.cliExecutablePath.contains("\0") else {
+                throw SingBoxConfigurationError.invalidDockerHubInstallation
+            }
+            cliURL = candidate
+        } else {
+            cliURL = nil
         }
 
         var backendHostnames: [String] = []
@@ -679,7 +701,7 @@ public enum SingBoxConfigurationBuilder {
             )
         }
 
-        guard dockerHubInstallation != nil else {
+        guard let cliURL else {
             return rules
         }
 

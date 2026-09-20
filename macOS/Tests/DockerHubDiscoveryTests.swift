@@ -40,6 +40,25 @@ final class DockerHubDiscoveryTests: XCTestCase {
         )
     }
 
+    func testValidBackendCapabilityDoesNotRequireBundledCLI() throws {
+        let application = try makeDockerApplication()
+        try FileManager.default.removeItem(
+            at: application.appendingPathComponent(
+                DockerHubDiscovery.cliExecutableRelativePath
+            )
+        )
+
+        let installation = try discovery(for: application).discoverBackendInstallation()
+
+        XCTAssertEqual(installation.applicationBundlePath, application.path)
+        XCTAssertEqual(
+            installation.backendExecutablePath,
+            application.appendingPathComponent(
+                DockerHubDiscovery.backendExecutableRelativePath
+            ).path
+        )
+    }
+
     func testDisabledTargetDoesNotRunDiscovery() throws {
         var discoveryWasCalled = false
         let installation = try DockerHubDiscovery.resolveIfEnabled(false) {
@@ -71,6 +90,9 @@ final class DockerHubDiscoveryTests: XCTestCase {
 
         XCTAssertThrowsError(
             try discovery(for: application).discoverActiveInstallation()
+        )
+        XCTAssertThrowsError(
+            try discovery(for: application).discoverBackendInstallation()
         )
     }
 

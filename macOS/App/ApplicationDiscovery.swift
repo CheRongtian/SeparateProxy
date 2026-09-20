@@ -236,6 +236,46 @@ enum DockerHubTargetDiscovery {
     }
 }
 
+enum DockerBackendTargetState: Equatable {
+    case installed(DockerDesktopBackendInstallation)
+    case notFound
+    case unsupported(String)
+
+    var canSelect: Bool {
+        guard case .installed = self else { return false }
+        return true
+    }
+
+    var label: String {
+        switch self {
+        case .installed:
+            return "Installed"
+        case .notFound:
+            return "Not Found"
+        case .unsupported:
+            return "Unsupported"
+        }
+    }
+}
+
+enum DockerBackendTargetDiscovery {
+    @MainActor
+    static func discover() -> DockerBackendTargetState {
+        let discovery = DockerHubDiscovery {
+            NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: DockerHubDiscovery.applicationBundleIdentifier
+            )
+        }
+        do {
+            return .installed(try discovery.discoverBackendInstallation())
+        } catch DockerHubDiscoveryError.notInstalled {
+            return .notFound
+        } catch {
+            return .unsupported(error.localizedDescription)
+        }
+    }
+}
+
 enum HomebrewTargetState: Equatable {
     case installed(HomebrewInstallation)
     case notFound

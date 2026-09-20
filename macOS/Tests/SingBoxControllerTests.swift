@@ -262,6 +262,304 @@ final class SingBoxControllerTests: XCTestCase {
         XCTAssertNil(store.activeConfigDigest)
     }
 
+    func testPIDWriteFailureTerminatesLaunchedProcessAndCleansUp() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        store.writePIDError = FakeError.writePIDFailed
+        let processes = FakeProcessManager()
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: [])) {
+            error in
+            guard let fakeError = error as? FakeError,
+                  case .writePIDFailed = fakeError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(processes.launchCount, 1)
+        XCTAssertEqual(processes.lastLaunchedProcess?.terminateCount, 1)
+        XCTAssertEqual(processes.waitForExitCalls, [processes.nextPID])
+        XCTAssertNil(store.pid)
+        XCTAssertNil(store.activeConfigDigest)
+        XCTAssertNil(store.configData)
+    }
+
+    func testPIDWriteFailureWithTerminationTimeoutPreservesUnresolvedProcess() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        store.writePIDError = FakeError.writePIDFailed
+        let processes = FakeProcessManager()
+        processes.waitForExitResult = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: [])) {
+            error in
+            guard case SingBoxControllerError.unresolvedLifecycle = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(processes.launchCount, 1)
+        XCTAssertEqual(processes.lastLaunchedProcess?.terminateCount, 1)
+        XCTAssertTrue(processes.lastLaunchedProcess?.isRunning == true)
+        XCTAssertEqual(store.configData, data)
+        XCTAssertNil(store.pid)
+    }
+
+    func testUnresolvedPIDWriteFailureBlocksSecondLaunch() throws {
+        let firstData = try chromeConfigurationData()
+        let secondData = try chromeAndGitConfigurationData()
+        let store = FakeRuntimeStore()
+        store.writePIDError = FakeError.writePIDFailed
+        let processes = FakeProcessManager()
+        processes.waitForExitResult = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(
+            configurationData: firstData,
+            redacting: []
+        ))
+        XCTAssertThrowsError(try controller.start(
+            configurationData: secondData,
+            redacting: []
+        )) { error in
+            guard case SingBoxControllerError.unresolvedLifecycle = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(processes.launchCount, 1)
+        XCTAssertEqual(store.configData, firstData)
+    }
+
+    func testStopTerminatesUnresolvedProcessWithoutPIDFile() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        store.writePIDError = FakeError.writePIDFailed
+        let processes = FakeProcessManager()
+        processes.waitForExitResult = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: []))
+        processes.waitForExitResult = true
+        try controller.stop()
+
+        XCTAssertEqual(processes.launchCount, 1)
+        XCTAssertEqual(processes.waitForExitCalls, [processes.nextPID, processes.nextPID])
+        XCTAssertFalse(processes.lastLaunchedProcess?.isRunning == true)
+        XCTAssertNil(store.pid)
+        XCTAssertNil(store.activeConfigDigest)
+        XCTAssertNil(store.configData)
+    }
+
+    func testStateUsesUnresolvedInMemoryProcessWithoutPIDFile() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        store.writePIDError = FakeError.writePIDFailed
+        let processes = FakeProcessManager()
+        processes.waitForExitResult = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: []))
+        XCTAssertEqual(try controller.state(), .running)
+
+        processes.lastLaunchedProcess?.isRunning = false
+        XCTAssertEqual(try controller.state(), .stopped)
+        XCTAssertNil(store.configData)
+    }
+
+    func testDigestWriteFailureTerminatesProcessAndRemovesDurablePID() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        store.writeActiveConfigDigestError = FakeError.digestWriteFailed
+        let processes = FakeProcessManager()
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: [])) {
+            error in
+            guard let fakeError = error as? FakeError,
+                  case .digestWriteFailed = fakeError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(processes.waitForExitCalls, [processes.nextPID])
+        XCTAssertEqual(processes.lastLaunchedProcess?.terminateCount, 1)
+        XCTAssertNil(store.pid)
+        XCTAssertNil(store.activeConfigDigest)
+        XCTAssertNil(store.configData)
+    }
+
+    func testDigestWriteFailureWithTerminationTimeoutPreservesDurablePID() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        store.writeActiveConfigDigestError = FakeError.digestWriteFailed
+        let processes = FakeProcessManager()
+        processes.waitForExitResult = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: [])) {
+            error in
+            guard case SingBoxControllerError.unresolvedLifecycle = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(store.pid, processes.nextPID)
+        XCTAssertNil(store.activeConfigDigest)
+        XCTAssertEqual(store.configData, data)
+    }
+
+    func testFinalProcessVerificationFailureDoesNotReturnStartSuccess() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        let processes = FakeProcessManager()
+        processes.matchesExpectedProcessOverride = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: [])) {
+            error in
+            guard case SingBoxControllerError.unresolvedLifecycle = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(processes.launchCount, 1)
+        XCTAssertEqual(store.pid, processes.nextPID)
+        XCTAssertEqual(
+            store.activeConfigDigest,
+            SingBoxController.configurationDigest(for: data)
+        )
+        XCTAssertEqual(processes.lastLaunchedProcess?.terminateCount, 0)
+    }
+
+    func testFinalVerificationMismatchStopFailsClosedAndBlocksSecondLaunch() throws {
+        let firstData = try chromeConfigurationData()
+        let secondData = try chromeAndGitConfigurationData()
+        let store = FakeRuntimeStore()
+        let processes = FakeProcessManager()
+        processes.matchesExpectedProcessOverride = false
+        processes.managedProcessStopsWhenWaitSucceeds = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(
+            configurationData: firstData,
+            redacting: []
+        ))
+        let removePIDCount = store.removePIDCount
+        let removeDigestCount = store.removeActiveConfigDigestCount
+        let removeConfigCount = store.removeConfigCount
+
+        XCTAssertThrowsError(try controller.stop()) { error in
+            guard case SingBoxControllerError.unresolvedLifecycle = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertTrue(processes.lastLaunchedProcess?.isRunning == true)
+        XCTAssertEqual(store.pid, processes.nextPID)
+        XCTAssertEqual(store.configData, firstData)
+        XCTAssertNotNil(store.activeConfigDigest)
+        XCTAssertEqual(store.removePIDCount, removePIDCount)
+        XCTAssertEqual(store.removeActiveConfigDigestCount, removeDigestCount)
+        XCTAssertEqual(store.removeConfigCount, removeConfigCount)
+
+        XCTAssertThrowsError(try controller.start(
+            configurationData: secondData,
+            redacting: []
+        )) { error in
+            guard case SingBoxControllerError.unresolvedLifecycle = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(processes.launchCount, 1)
+        XCTAssertEqual(store.configData, firstData)
+    }
+
+    func testFinalVerificationMismatchStopCleansUpAfterConfirmedExitAndAllowsRestart() throws {
+        let firstData = try chromeConfigurationData()
+        let secondData = try chromeAndGitConfigurationData()
+        let store = FakeRuntimeStore()
+        let processes = FakeProcessManager()
+        processes.matchesExpectedProcessOverride = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(
+            configurationData: firstData,
+            redacting: []
+        ))
+        try controller.stop()
+
+        XCTAssertFalse(processes.lastLaunchedProcess?.isRunning == true)
+        XCTAssertNil(store.pid)
+        XCTAssertNil(store.activeConfigDigest)
+        XCTAssertNil(store.configData)
+
+        processes.matchesExpectedProcessOverride = nil
+        XCTAssertEqual(
+            try controller.start(configurationData: secondData, redacting: []),
+            processes.nextPID
+        )
+        XCTAssertEqual(processes.launchCount, 2)
+    }
+
+    func testManagedWaitSuccessDoesNotConfirmExitWhileProcessIsStillRunning() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        let processes = FakeProcessManager()
+        processes.matchesExpectedProcessOverride = false
+        processes.waitForExitResult = true
+        processes.managedProcessStopsWhenWaitSucceeds = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: []))
+        XCTAssertThrowsError(try controller.stop()) { error in
+            guard case SingBoxControllerError.unresolvedLifecycle = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(processes.managedProcessWaitForExitCalls, [processes.nextPID])
+        XCTAssertTrue(processes.lastLaunchedProcess?.isRunning == true)
+        XCTAssertEqual(processes.lastLaunchedProcess?.terminateCount, 1)
+        XCTAssertEqual(store.configData, data)
+    }
+
+    func testUnresolvedStopCleansUpProcessAlreadyConfirmedExited() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        let processes = FakeProcessManager()
+        processes.matchesExpectedProcessOverride = false
+        let controller = makeController(store: store, processes: processes)
+
+        XCTAssertThrowsError(try controller.start(configurationData: data, redacting: []))
+        processes.lastLaunchedProcess?.isRunning = false
+        try controller.stop()
+
+        XCTAssertEqual(processes.managedProcessWaitForExitCalls, [])
+        XCTAssertNil(store.pid)
+        XCTAssertNil(store.activeConfigDigest)
+        XCTAssertNil(store.configData)
+    }
+
+    func testFinalProcessVerificationSuccessReturnsLaunchedPID() throws {
+        let data = try chromeConfigurationData()
+        let store = FakeRuntimeStore()
+        let processes = FakeProcessManager()
+        let controller = makeController(store: store, processes: processes)
+
+        let pid = try controller.start(configurationData: data, redacting: [])
+
+        XCTAssertEqual(pid, processes.nextPID)
+        XCTAssertEqual(processes.launchCount, 1)
+        XCTAssertEqual(store.pid, processes.nextPID)
+        XCTAssertEqual(
+            store.activeConfigDigest,
+            SingBoxController.configurationDigest(for: data)
+        )
+    }
+
     func testSameLogicalConfigurationProducesStableExactBytesAndDigest() throws {
         let first = try chromeAndGitConfigurationData()
         let second = try chromeAndGitConfigurationData()
@@ -291,6 +589,133 @@ final class SingBoxControllerTests: XCTestCase {
         XCTAssertNil(try store.readActiveConfigDigest())
         try store.removeActiveConfigDigest()
         XCTAssertNil(try store.readActiveConfigDigest())
+    }
+
+    func testSecureRuntimeStoreRejectsSymlinkRuntimeDirectory() throws {
+        let baseURL = try makeTemporaryRuntimeBase()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        let targetURL = baseURL.appendingPathComponent("runtime-target", isDirectory: true)
+        try FileManager.default.createDirectory(at: targetURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: baseURL.appendingPathComponent("runtime"),
+            withDestinationURL: targetURL
+        )
+        let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: getuid())
+
+        XCTAssertThrowsError(try store.prepare()) { error in
+            guard case SecureRuntimeStoreError.invalidDirectory = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testSecureRuntimeStoreRejectsSymlinkMetadataFile() throws {
+        let baseURL = try makeTemporaryRuntimeBase()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: getuid())
+        try store.prepare()
+        let targetURL = baseURL.appendingPathComponent("outside-pid")
+        try Data("123\n".utf8).write(to: targetURL)
+        try FileManager.default.createSymbolicLink(
+            at: store.pidURL,
+            withDestinationURL: targetURL
+        )
+
+        XCTAssertThrowsError(try store.readPID()) { error in
+            guard case SecureRuntimeStoreError.invalidFile = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testSecureRuntimeStoreRejectsNonRegularMetadataFile() throws {
+        let baseURL = try makeTemporaryRuntimeBase()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: getuid())
+        try store.prepare()
+        try FileManager.default.createDirectory(
+            at: store.pidURL,
+            withIntermediateDirectories: false
+        )
+
+        XCTAssertThrowsError(try store.readPID()) { error in
+            guard case SecureRuntimeStoreError.invalidFile = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testSecureRuntimeStoreRejectsInsecureDirectoryMode() throws {
+        let baseURL = try makeTemporaryRuntimeBase()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        XCTAssertEqual(Darwin.chmod(baseURL.path, 0o777), 0)
+        let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: getuid())
+
+        XCTAssertThrowsError(try store.prepare()) { error in
+            guard case SecureRuntimeStoreError.invalidDirectory = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testSecureRuntimeStoreRejectsUnexpectedOwner() throws {
+        let baseURL = try makeTemporaryRuntimeBase()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        let unexpectedOwner: uid_t = getuid() == 0 ? 1 : 0
+        let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: unexpectedOwner)
+
+        XCTAssertThrowsError(try store.prepare()) { error in
+            guard case SecureRuntimeStoreError.invalidDirectory = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testSecureRuntimeStoreRejectsMalformedAndEmptyPID() throws {
+        for contents in ["not-a-pid", ""] {
+            let baseURL = try makeTemporaryRuntimeBase()
+            defer { try? FileManager.default.removeItem(at: baseURL) }
+            let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: getuid())
+            try store.prepare()
+            try Data(contents.utf8).write(to: store.pidURL)
+
+            XCTAssertThrowsError(try store.readPID()) { error in
+                guard case SecureRuntimeStoreError.invalidPID = error else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+            }
+        }
+    }
+
+    func testSecureRuntimeStoreRejectsOversizedMetadata() throws {
+        let baseURL = try makeTemporaryRuntimeBase()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: getuid())
+        try store.prepare()
+        try Data(repeating: 0x31, count: 4_097).write(to: store.pidURL)
+
+        XCTAssertThrowsError(try store.readPID()) { error in
+            guard case SecureRuntimeStoreError.invalidFile = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testSecureRuntimeStoreTreatsMalformedDigestAsMissing() throws {
+        let baseURL = try makeTemporaryRuntimeBase()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        let store = SecureRuntimeStore(baseURL: baseURL, expectedOwner: getuid())
+        try store.prepare()
+        try Data("not-a-sha256-digest".utf8).write(to: store.activeConfigDigestURL)
+
+        XCTAssertNil(try store.readActiveConfigDigest())
+    }
+
+    private func makeTemporaryRuntimeBase() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SeparateProxy-RuntimeStore-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
     private func makeController(
@@ -338,7 +763,9 @@ final class SingBoxControllerTests: XCTestCase {
 
 private enum FakeError: Error {
     case digestUnreadable
+    case digestWriteFailed
     case launchFailed
+    case writePIDFailed
 }
 
 private final class FakeRuntimeStore: SingBoxRuntimeStoring {
@@ -353,6 +780,8 @@ private final class FakeRuntimeStore: SingBoxRuntimeStoring {
     var pid: pid_t?
     var activeConfigDigest: String?
     var digestState = DigestState.validOrMissing
+    var writePIDError: Error?
+    var writeActiveConfigDigestError: Error?
     var removeConfigCount = 0
     var removePIDCount = 0
     var removeActiveConfigDigestCount = 0
@@ -362,6 +791,9 @@ private final class FakeRuntimeStore: SingBoxRuntimeStoring {
     }
 
     func writePID(_ pid: pid_t) throws {
+        if let writePIDError {
+            throw writePIDError
+        }
         self.pid = pid
     }
 
@@ -370,6 +802,9 @@ private final class FakeRuntimeStore: SingBoxRuntimeStoring {
     }
 
     func writeActiveConfigDigest(_ digest: String) throws {
+        if let writeActiveConfigDigestError {
+            throw writeActiveConfigDigestError
+        }
         activeConfigDigest = digest
         digestState = .validOrMissing
     }
@@ -418,7 +853,6 @@ private final class FakeManagedProcess: SingBoxManagedProcess {
 
     func terminate() {
         terminateCount += 1
-        isRunning = false
     }
 }
 
@@ -428,10 +862,14 @@ private final class FakeProcessManager: SingBoxProcessManaging {
     var verifiedPIDs: Set<pid_t> = []
     var nextPID: pid_t = 200
     var waitForExitResult = true
+    var managedProcessStopsWhenWaitSucceeds = true
     var launchError: Error?
+    var matchesExpectedProcessOverride: Bool?
     private(set) var launchCount = 0
     private(set) var terminateCalls: [pid_t] = []
     private(set) var waitForExitCalls: [pid_t] = []
+    private(set) var managedProcessWaitForExitCalls: [pid_t] = []
+    private(set) var lastLaunchedProcess: FakeManagedProcess?
 
     func checkConfiguration(
         executableURL: URL,
@@ -441,6 +879,9 @@ private final class FakeProcessManager: SingBoxProcessManaging {
     }
 
     func matchesExpectedProcess(pid: pid_t, expectedCommand: String) throws -> Bool {
+        if let matchesExpectedProcessOverride {
+            return matchesExpectedProcessOverride
+        }
         verifiedPIDs.contains(pid)
     }
 
@@ -454,6 +895,7 @@ private final class FakeProcessManager: SingBoxProcessManaging {
             throw launchError
         }
         let process = FakeManagedProcess(processIdentifier: nextPID)
+        lastLaunchedProcess = process
         verifiedPIDs.insert(nextPID)
         return process
     }
@@ -466,6 +908,21 @@ private final class FakeProcessManager: SingBoxProcessManaging {
         waitForExitCalls.append(pid)
         if waitForExitResult {
             verifiedPIDs.remove(pid)
+            if lastLaunchedProcess?.processIdentifier == pid {
+                lastLaunchedProcess?.isRunning = false
+            }
+        }
+        return waitForExitResult
+    }
+
+    func waitForExit(process: SingBoxManagedProcess) throws -> Bool {
+        waitForExitCalls.append(process.processIdentifier)
+        managedProcessWaitForExitCalls.append(process.processIdentifier)
+        if waitForExitResult, managedProcessStopsWhenWaitSucceeds {
+            verifiedPIDs.remove(process.processIdentifier)
+            if let fakeProcess = process as? FakeManagedProcess {
+                fakeProcess.isRunning = false
+            }
         }
         return waitForExitResult
     }

@@ -915,7 +915,7 @@ final class SingBoxConfigurationTests: XCTestCase {
                     chromeBundlePath: nil,
                     codexExecutablePath: nil,
                     vsCodePluginHelperExecutablePath: nil,
-                    kubernetesInstallation: dockerInstallation
+                    kubernetesInstallation: dockerInstallation.backendInstallation
                 )
             ),
             (
@@ -926,7 +926,7 @@ final class SingBoxConfigurationTests: XCTestCase {
                     codexExecutablePath: nil,
                     vsCodePluginHelperExecutablePath: nil,
                     dockerHubInstallation: dockerInstallation,
-                    kubernetesInstallation: dockerInstallation
+                    kubernetesInstallation: dockerInstallation.backendInstallation
                 )
             ),
             ("All targets", try allTargetsConfiguration()),
@@ -1053,8 +1053,8 @@ final class SingBoxConfigurationTests: XCTestCase {
             vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
             gitInstallation: gitInstallation,
             dockerHubInstallation: dockerInstallation,
-            kubernetesInstallation: dockerInstallation,
-            containerRegistriesInstallation: dockerInstallation,
+            kubernetesInstallation: dockerInstallation.backendInstallation,
+            containerRegistriesInstallation: dockerInstallation.backendInstallation,
             homebrewEnabled: true,
             proxyWebsiteHostnames: ["chatgpt.com"]
         )

@@ -3,6 +3,16 @@ import Foundation
 import XCTest
 
 final class ChromeDNSManagerTests: XCTestCase {
+    private let historicalCloudflareTemplates = """
+    {
+       "servers": [ {
+          "endpoints": [ {
+             "ips": [ "1.1.1.1", "1.0.0.1" ]
+          } ],
+          "template": "https://one.one.one.one/dns-query{?dns}"
+       } ]
+    }
+    """
     private var temporaryDirectory: URL!
     private var localStateURL: URL!
     private var integrationStateURL: URL!
@@ -28,56 +38,6 @@ final class ChromeDNSManagerTests: XCTestCase {
         }
     }
 
-    func testConfigureAddsTargetPreferencesWhenTheyWereAbsent() throws {
-        try writeFixture(["unrelated": ["preserved": true]])
-        let manager = makeManager()
-
-        try manager.configure()
-
-        let root = try readFixture()
-        let dns = try XCTUnwrap(root["dns_over_https"] as? [String: Any])
-        XCTAssertEqual(dns["mode"] as? String, "automatic")
-        XCTAssertEqual(dns["templates"] as? String, ChromeDNSManager.cloudflareTemplates)
-        XCTAssertEqual(dns["automatic_mode_fallback_to_doh"] as? Bool, false)
-        let unrelated = try XCTUnwrap(root["unrelated"] as? [String: Any])
-        XCTAssertEqual(unrelated["preserved"] as? Bool, true)
-    }
-
-    func testConfigureStoresExistenceAndOriginalValuesOnly() throws {
-        try writeFixture([
-            "dns_over_https": [
-                "mode": "secure",
-                "templates": "https://resolver.example/dns-query{?dns}",
-                "automatic_mode_fallback_to_doh": true,
-                "unrelated_dns_value": "preserve-me",
-            ],
-            "other": 42,
-        ])
-
-        try makeManager().configure()
-
-        let record = try readIntegrationRecord()
-        XCTAssertEqual(record["version"] as? Int, 1)
-        XCTAssertEqual(record["phase"] as? String, "installed")
-        let original = try XCTUnwrap(record["original"] as? [String: Any])
-        assertStoredPreference(original["mode"], existed: true, value: "secure")
-        assertStoredPreference(
-            original["templates"],
-            existed: true,
-            value: "https://resolver.example/dns-query{?dns}"
-        )
-        assertStoredPreference(
-            original["automaticModeFallbackToDoh"],
-            existed: true,
-            value: true
-        )
-        XCTAssertEqual(Set(original.keys), [
-            "mode",
-            "templates",
-            "automaticModeFallbackToDoh",
-        ])
-    }
-
     func testRemoveRestoresOriginalValuesWhenTargetStillMatches() throws {
         let originalDNS: [String: Any] = [
             "mode": "secure",
@@ -86,8 +46,8 @@ final class ChromeDNSManagerTests: XCTestCase {
             "unrelated_dns_value": "preserve-me",
         ]
         try writeFixture(["dns_over_https": originalDNS, "other": 42])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
 
         XCTAssertEqual(try manager.removeIntegration(), .removed)
 
@@ -105,8 +65,8 @@ final class ChromeDNSManagerTests: XCTestCase {
 
     func testRemoveDoesNotOverwriteSettingsChangedExternally() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
 
         var externallyModified = try readFixture()
         var dns = try XCTUnwrap(externallyModified["dns_over_https"] as? [String: Any])
@@ -123,56 +83,57 @@ final class ChromeDNSManagerTests: XCTestCase {
         XCTAssertEqual(manager.integrationState(), .modifiedExternally)
     }
 
-    func testMalformedJSONIsRejectedWithoutChangingSourceFile() throws {
+    func testLegacyMigrationRejectsMalformedJSONWithoutChangingSourceFile() throws {
+        try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         let malformed = Data(#"{"dns_over_https": "#.utf8)
         try malformed.write(to: localStateURL)
         let before = try Data(contentsOf: localStateURL)
 
-        XCTAssertThrowsError(try makeManager().configure()) { error in
+        XCTAssertThrowsError(
+            try makeManager().migrateLegacyIntegrationForWebsiteRouting()
+        ) { error in
             XCTAssertEqual(
                 error.localizedDescription,
                 ChromeDNSIntegrationError.malformedLocalState.localizedDescription
             )
         }
         XCTAssertEqual(try Data(contentsOf: localStateURL), before)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: integrationStateURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: integrationStateURL.path))
     }
 
-    func testUnexpectedDNSSchemaFailsClosed() throws {
+    func testLegacyMigrationUnexpectedDNSSchemaFailsClosed() throws {
+        try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         try writeFixture(["dns_over_https": "unexpected"])
         let before = try Data(contentsOf: localStateURL)
 
-        XCTAssertThrowsError(try makeManager().configure())
+        XCTAssertThrowsError(
+            try makeManager().migrateLegacyIntegrationForWebsiteRouting()
+        )
         XCTAssertEqual(try Data(contentsOf: localStateURL), before)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: integrationStateURL.path))
-    }
-
-    func testTemporaryWriteFailureLeavesOriginalFileIntact() throws {
-        try writeFixture(["dns_over_https": ["mode": "off"], "preserved": true])
-        let before = try Data(contentsOf: localStateURL)
-        let manager = makeManager(writer: FailingChromeDNSLocalStateWriter())
-
-        XCTAssertThrowsError(try manager.configure())
-        XCTAssertEqual(try Data(contentsOf: localStateURL), before)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: integrationStateURL.path))
     }
 
     func testAtomicReplacePreservesOriginalPermissions() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]], permissions: 0o640)
+        try installHistoricalIntegration()
         let before = try permissions(of: localStateURL)
 
-        try makeManager().configure()
+        XCTAssertEqual(try makeManager().removeIntegration(), .removed)
 
         XCTAssertEqual(try permissions(of: localStateURL), before)
     }
 
     func testChromeRunningPreventsAnyLocalStateWrite() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         let before = try Data(contentsOf: localStateURL)
         chromeController.running = true
         let writer = RecordingChromeDNSLocalStateWriter()
         let manager = makeManager(writer: writer)
 
-        XCTAssertThrowsError(try manager.configure()) { error in
+        XCTAssertThrowsError(try manager.removeIntegration()) { error in
             XCTAssertEqual(
                 error.localizedDescription,
                 ChromeDNSIntegrationError.chromeRunning.localizedDescription
@@ -184,6 +145,7 @@ final class ChromeDNSManagerTests: XCTestCase {
 
     func testChromeRestartBeforeAtomicWriteAbortsWithoutChangingLocalState() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         let before = try Data(contentsOf: localStateURL)
         let controller = SequencedChromeApplicationController(
             runningResults: [false, true]
@@ -196,7 +158,7 @@ final class ChromeDNSManagerTests: XCTestCase {
             localStateWriter: writer
         )
 
-        XCTAssertThrowsError(try manager.configure())
+        XCTAssertThrowsError(try manager.removeIntegration())
         XCTAssertEqual(writer.writeCount, 0)
         XCTAssertEqual(try Data(contentsOf: localStateURL), before)
     }
@@ -206,8 +168,8 @@ final class ChromeDNSManagerTests: XCTestCase {
             "dns_over_https": ["unrelated_dns_value": "preserve-me"],
             "other": 42,
         ])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
 
         XCTAssertEqual(try manager.removeIntegration(), .removed)
 
@@ -243,8 +205,8 @@ final class ChromeDNSManagerTests: XCTestCase {
             "dns_over_https": ["unrelated_dns_value": "preserve-me"],
             "other": 42,
         ])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
 
         XCTAssertEqual(
             try manager.migrateLegacyIntegrationForWebsiteRouting(),
@@ -268,8 +230,8 @@ final class ChromeDNSManagerTests: XCTestCase {
             "automatic_mode_fallback_to_doh": true,
         ]
         try writeFixture(["dns_over_https": originalDNS])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
 
         XCTAssertEqual(
             try manager.migrateLegacyIntegrationForWebsiteRouting(),
@@ -289,8 +251,8 @@ final class ChromeDNSManagerTests: XCTestCase {
 
     func testLegacyMigrationAllowsExternalChangeWithoutOverwritingIt() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
 
         var root = try readFixture()
         var dns = try XCTUnwrap(root["dns_over_https"] as? [String: Any])
@@ -309,7 +271,7 @@ final class ChromeDNSManagerTests: XCTestCase {
 
     func testLegacyMigrationWriteFailureThrowsAndPreservesTargetPreferences() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]])
-        try makeManager().configure()
+        try installHistoricalIntegration()
         let beforeMigration = try Data(contentsOf: localStateURL)
         let failingManager = makeManager(writer: FailingChromeDNSLocalStateWriter())
 
@@ -322,8 +284,8 @@ final class ChromeDNSManagerTests: XCTestCase {
 
     func testLegacyMigrationUnexpectedSchemaFailsClosed() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
         try writeFixture(["dns_over_https": "unexpected"])
         let beforeMigration = try Data(contentsOf: localStateURL)
 
@@ -347,8 +309,8 @@ final class ChromeDNSManagerTests: XCTestCase {
 
     func testLegacyMigrationDoesNotTouchECHBackup() throws {
         try writeFixture(["dns_over_https": ["mode": "off"]])
+        try installHistoricalIntegration()
         let manager = makeManager()
-        try manager.configure()
         let echStateURL = integrationStateURL
             .deletingLastPathComponent()
             .appendingPathComponent("chrome-ech-integration.json")
@@ -373,6 +335,55 @@ final class ChromeDNSManagerTests: XCTestCase {
         )
     }
 
+    private func installHistoricalIntegration() throws {
+        var root = try readFixture()
+        let originalDNS = (root["dns_over_https"] as? [String: Any]) ?? [:]
+        var installedDNS = originalDNS
+        installedDNS["mode"] = "automatic"
+        installedDNS["templates"] = historicalCloudflareTemplates
+        installedDNS["automatic_mode_fallback_to_doh"] = false
+        root["dns_over_https"] = installedDNS
+
+        let installedData = try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try installedData.write(to: localStateURL)
+
+        let original: [String: Any] = [
+            "mode": storedPreference(key: "mode", in: originalDNS),
+            "templates": storedPreference(key: "templates", in: originalDNS),
+            "automaticModeFallbackToDoh": storedPreference(
+                key: "automatic_mode_fallback_to_doh",
+                in: originalDNS
+            ),
+        ]
+        let record: [String: Any] = [
+            "version": 1,
+            "phase": "installed",
+            "original": original,
+        ]
+        try FileManager.default.createDirectory(
+            at: integrationStateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let recordData = try JSONSerialization.data(
+            withJSONObject: record,
+            options: [.sortedKeys]
+        )
+        try recordData.write(to: integrationStateURL)
+    }
+
+    private func storedPreference(
+        key: String,
+        in dictionary: [String: Any]
+    ) -> [String: Any] {
+        guard let value = dictionary[key] else {
+            return ["existed": false]
+        }
+        return ["existed": true, "value": value]
+    }
+
     private func writeFixture(
         _ root: [String: Any],
         permissions: mode_t = 0o600
@@ -392,50 +403,12 @@ final class ChromeDNSManagerTests: XCTestCase {
         )
     }
 
-    private func readIntegrationRecord() throws -> [String: Any] {
-        let data = try Data(contentsOf: integrationStateURL)
-        return try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-    }
-
     private func permissions(of url: URL) throws -> mode_t {
         var info = stat()
         XCTAssertEqual(Darwin.lstat(url.path, &info), 0)
         return info.st_mode & 0o7777
     }
 
-    private func assertStoredPreference(
-        _ object: Any?,
-        existed: Bool,
-        value: Any,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        guard let dictionary = object as? [String: Any] else {
-            XCTFail("Stored preference is missing", file: file, line: line)
-            return
-        }
-        XCTAssertEqual(dictionary["existed"] as? Bool, existed, file: file, line: line)
-        switch value {
-        case let expected as String:
-            XCTAssertEqual(
-                dictionary["value"] as? String,
-                expected,
-                file: file,
-                line: line
-            )
-        case let expected as Bool:
-            XCTAssertEqual(
-                dictionary["value"] as? Bool,
-                expected,
-                file: file,
-                line: line
-            )
-        default:
-            XCTFail("Unsupported stored preference type", file: file, line: line)
-        }
-    }
 }
 
 private final class FakeChromeApplicationController: ChromeApplicationControlling {

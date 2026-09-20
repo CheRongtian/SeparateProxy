@@ -66,14 +66,20 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                 ) {
                     try AppleGitDiscovery().discoverActiveInstallation()
                 }
+                let dockerDiscovery = DockerHubDiscovery {
+                    NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: DockerHubDiscovery.applicationBundleIdentifier
+                    )
+                }
                 let dockerHubInstallation = try DockerHubDiscovery.resolveIfEnabled(
-                    dockerEnabled || kubernetesEnabled || containerRegistriesEnabled
+                    dockerEnabled
                 ) {
-                    try DockerHubDiscovery {
-                        NSWorkspace.shared.urlForApplication(
-                            withBundleIdentifier: DockerHubDiscovery.applicationBundleIdentifier
-                        )
-                    }.discoverActiveInstallation()
+                    try dockerDiscovery.discoverActiveInstallation()
+                }
+                let dockerBackendInstallation = try DockerHubDiscovery.resolveBackendIfEnabled(
+                    kubernetesEnabled || containerRegistriesEnabled
+                ) {
+                    try dockerDiscovery.discoverBackendInstallation()
                 }
                 let homebrewInstallation = try HomebrewDiscovery.resolveIfEnabled(
                     homebrewEnabled
@@ -105,9 +111,11 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
                         gitInstallation: gitInstallation,
                         dockerHubInstallation: dockerEnabled ? dockerHubInstallation : nil,
-                        kubernetesInstallation: kubernetesEnabled ? dockerHubInstallation : nil,
+                        kubernetesInstallation: kubernetesEnabled
+                            ? dockerBackendInstallation
+                            : nil,
                         containerRegistriesInstallation: containerRegistriesEnabled
-                            ? dockerHubInstallation
+                            ? dockerBackendInstallation
                             : nil,
                         homebrewEnabled: homebrewInstallation != nil,
                         homebrewGitInstallation: homebrewGitInstallation,

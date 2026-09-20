@@ -61,7 +61,6 @@ enum ChromeDNSIntegrationError: LocalizedError {
     case localStateOwnerMismatch
     case malformedLocalState
     case unexpectedSchema(String)
-    case missingOriginalState
     case invalidStoredState
     case fileOperation(String)
 
@@ -83,8 +82,6 @@ enum ChromeDNSIntegrationError: LocalizedError {
             return "Chrome Local State contains malformed JSON."
         case let .unexpectedSchema(detail):
             return "Chrome Local State has an unsupported DNS schema: \(detail)"
-        case .missingOriginalState:
-            return "The original Chrome DNS settings are unavailable, so SeparateProxy did not change Chrome."
         case .invalidStoredState:
             return "The stored Chrome DNS integration state is invalid."
         case let .fileOperation(message):
@@ -464,46 +461,6 @@ final class ChromeDNSManager {
         return record.phase == .preparing || record.phase == .installed
     }
 
-    func configure() throws {
-        guard !isChromeRunning() else {
-            throw ChromeDNSIntegrationError.chromeRunning
-        }
-
-        var document = try readLocalState()
-        if targetMatches(document.dns),
-           let record = try integrationStore.load(),
-           record.phase != .modifiedExternally {
-            return
-        }
-
-        let original = try captureOriginalState(from: document.dns)
-        try integrationStore.save(phase: .preparing, original: original)
-
-        document.dns[Self.modeKey] = "automatic"
-        document.dns[Self.templatesKey] = Self.cloudflareTemplates
-        document.dns[Self.fallbackKey] = false
-        document.root[Self.dnsKey] = document.dns
-
-        guard !isChromeRunning() else {
-            try? integrationStore.remove()
-            throw ChromeDNSIntegrationError.chromeRunning
-        }
-
-        do {
-            let data = try encodedLocalState(document.root)
-            try localStateWriter.replaceFile(
-                at: localStateURL,
-                with: data,
-                preserving: document.metadata
-            )
-        } catch {
-            try? integrationStore.remove()
-            throw error
-        }
-
-        try integrationStore.save(phase: .installed, original: original)
-    }
-
     func removeIntegration() throws -> ChromeDNSRemovalResult {
         guard let record = try integrationStore.load() else {
             return .notConfigured
@@ -616,7 +573,7 @@ final class ChromeDNSManager {
             dns = [:]
         }
 
-        _ = try captureOriginalState(from: dns)
+        try validateSupportedPreferences(in: dns)
 
         return LocalStateDocument(
             root: root,
@@ -629,14 +586,10 @@ final class ChromeDNSManager {
         )
     }
 
-    private func captureOriginalState(
-        from dns: [String: Any]
-    ) throws -> OriginalChromeDNSState {
-        OriginalChromeDNSState(
-            mode: try stringPreference(Self.modeKey, in: dns),
-            templates: try stringPreference(Self.templatesKey, in: dns),
-            automaticModeFallbackToDoh: try boolPreference(Self.fallbackKey, in: dns)
-        )
+    private func validateSupportedPreferences(in dns: [String: Any]) throws {
+        _ = try stringPreference(Self.modeKey, in: dns)
+        _ = try stringPreference(Self.templatesKey, in: dns)
+        _ = try boolPreference(Self.fallbackKey, in: dns)
     }
 
     private func stringPreference(

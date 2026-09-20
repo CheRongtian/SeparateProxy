@@ -1,18 +1,48 @@
 import Darwin
 import Foundation
 
-public struct DockerHubInstallation: Equatable, Sendable {
+public struct DockerDesktopBackendInstallation: Equatable, Sendable {
     public let applicationBundlePath: String
     public let backendExecutablePath: String
+
+    public init(
+        applicationBundlePath: String,
+        backendExecutablePath: String
+    ) {
+        self.applicationBundlePath = applicationBundlePath
+        self.backendExecutablePath = backendExecutablePath
+    }
+}
+
+public struct DockerHubInstallation: Equatable, Sendable {
+    public let backendInstallation: DockerDesktopBackendInstallation
     public let cliExecutablePath: String
+
+    public var applicationBundlePath: String {
+        backendInstallation.applicationBundlePath
+    }
+
+    public var backendExecutablePath: String {
+        backendInstallation.backendExecutablePath
+    }
 
     public init(
         applicationBundlePath: String,
         backendExecutablePath: String,
         cliExecutablePath: String
     ) {
-        self.applicationBundlePath = applicationBundlePath
-        self.backendExecutablePath = backendExecutablePath
+        backendInstallation = DockerDesktopBackendInstallation(
+            applicationBundlePath: applicationBundlePath,
+            backendExecutablePath: backendExecutablePath
+        )
+        self.cliExecutablePath = cliExecutablePath
+    }
+
+    public init(
+        backendInstallation: DockerDesktopBackendInstallation,
+        cliExecutablePath: String
+    ) {
+        self.backendInstallation = backendInstallation
         self.cliExecutablePath = cliExecutablePath
     }
 }
@@ -26,7 +56,7 @@ public enum DockerHubDiscoveryError: LocalizedError, Equatable {
         case .notInstalled:
             return "Docker Desktop was not found."
         case let .invalidInstallation(reason):
-            return "Docker Hub support is unavailable: \(reason)"
+            return "Docker Desktop support is unavailable: \(reason)"
         }
     }
 }
@@ -137,7 +167,56 @@ public struct DockerHubDiscovery {
         return try discovery()
     }
 
+    public static func resolveBackendIfEnabled(
+        _ enabled: Bool,
+        discovery: () throws -> DockerDesktopBackendInstallation
+    ) rethrows -> DockerDesktopBackendInstallation? {
+        guard enabled else { return nil }
+        return try discovery()
+    }
+
+    public func discoverBackendInstallation() throws -> DockerDesktopBackendInstallation {
+        let (canonicalBundle, expectedOwner) = try discoverApplicationBundle()
+        let backendExecutable = try validateNestedExecutable(
+            relativePath: Self.backendExecutableRelativePath,
+            expectedBasename: "com.docker.backend",
+            label: "the Docker backend",
+            bundle: canonicalBundle,
+            expectedOwner: expectedOwner
+        )
+        return DockerDesktopBackendInstallation(
+            applicationBundlePath: canonicalBundle.path,
+            backendExecutablePath: backendExecutable.path
+        )
+    }
+
     public func discoverActiveInstallation() throws -> DockerHubInstallation {
+        let (canonicalBundle, expectedOwner) = try discoverApplicationBundle()
+        let backendExecutable = try validateNestedExecutable(
+            relativePath: Self.backendExecutableRelativePath,
+            expectedBasename: "com.docker.backend",
+            label: "the Docker backend",
+            bundle: canonicalBundle,
+            expectedOwner: expectedOwner
+        )
+        let cliExecutable = try validateNestedExecutable(
+            relativePath: Self.cliExecutableRelativePath,
+            expectedBasename: "docker",
+            label: "the bundled Docker CLI",
+            bundle: canonicalBundle,
+            expectedOwner: expectedOwner
+        )
+
+        return DockerHubInstallation(
+            backendInstallation: DockerDesktopBackendInstallation(
+                applicationBundlePath: canonicalBundle.path,
+                backendExecutablePath: backendExecutable.path
+            ),
+            cliExecutablePath: cliExecutable.path
+        )
+    }
+
+    private func discoverApplicationBundle() throws -> (URL, uid_t) {
         guard let candidate = applicationURLProvider() else {
             throw DockerHubDiscoveryError.notInstalled
         }
@@ -166,27 +245,7 @@ public struct DockerHubDiscovery {
                 "the bundle identifier is not \(Self.applicationBundleIdentifier)"
             )
         }
-
-        let backendExecutable = try validateNestedExecutable(
-            relativePath: Self.backendExecutableRelativePath,
-            expectedBasename: "com.docker.backend",
-            label: "the Docker backend",
-            bundle: canonicalBundle,
-            expectedOwner: bundleInformation.st_uid
-        )
-        let cliExecutable = try validateNestedExecutable(
-            relativePath: Self.cliExecutableRelativePath,
-            expectedBasename: "docker",
-            label: "the bundled Docker CLI",
-            bundle: canonicalBundle,
-            expectedOwner: bundleInformation.st_uid
-        )
-
-        return DockerHubInstallation(
-            applicationBundlePath: canonicalBundle.path,
-            backendExecutablePath: backendExecutable.path,
-            cliExecutablePath: cliExecutable.path
-        )
+        return (canonicalBundle, bundleInformation.st_uid)
     }
 
     private func validateNestedExecutable(

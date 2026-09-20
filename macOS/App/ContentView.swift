@@ -21,8 +21,8 @@ protocol ProxyViewModeling: ObservableObject {
     var codexTargetState: CodexTargetState { get }
     var gitTargetState: GitTargetState { get }
     var dockerHubTargetState: DockerHubTargetState { get }
-    var kubernetesTargetState: DockerHubTargetState { get }
-    var containerRegistriesTargetState: DockerHubTargetState { get }
+    var kubernetesTargetState: DockerBackendTargetState { get }
+    var containerRegistriesTargetState: DockerBackendTargetState { get }
     var homebrewTargetState: HomebrewTargetState { get }
     var state: ProxyState { get }
     var message: String { get }
@@ -962,6 +962,13 @@ private enum PreviewProxyFixtures {
         )
     )
 
+    static let dockerBackendInstalled = DockerBackendTargetState.installed(
+        DockerDesktopBackendInstallation(
+            applicationBundlePath: "/Preview/Docker.app",
+            backendExecutablePath: "/Preview/Docker.app/Contents/MacOS/com.docker.backend"
+        )
+    )
+
     static let homebrewInstalled = HomebrewTargetState.installed(
         HomebrewInstallation(
             prefixPath: "/Preview/homebrew",
@@ -997,8 +1004,8 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
     @Published var codexTargetState = PreviewProxyFixtures.codexInstalled
     @Published var gitTargetState = PreviewProxyFixtures.gitInstalled
     @Published var dockerHubTargetState = PreviewProxyFixtures.dockerInstalled
-    @Published var kubernetesTargetState = PreviewProxyFixtures.dockerInstalled
-    @Published var containerRegistriesTargetState = PreviewProxyFixtures.dockerInstalled
+    @Published var kubernetesTargetState = PreviewProxyFixtures.dockerBackendInstalled
+    @Published var containerRegistriesTargetState = PreviewProxyFixtures.dockerBackendInstalled
     @Published var homebrewTargetState = PreviewProxyFixtures.homebrewInstalled
     @Published var state: ProxyState = .running
     @Published var message = "The proxy is running. PID: 57546."

@@ -412,6 +412,8 @@ Contents/Resources/bin/docker
 
 Each executable must remain inside the validated bundle, be a regular non-symlink file with executable permission, and have the expected owner and basename. The helper does not trust the shell `PATH`, `/usr/local/bin/docker`, or a path supplied over XPC. Darwin process lookup obtains the executable vnode path, so V1 matches only the validated canonical bundled CLI path even when a shell entry is a symlink into Docker.app. The local Docker installation did not pass strict code-signature verification reliably, so signature metadata is supporting evidence and not a mandatory acceptance condition.
 
+These are separate capabilities. Docker Hub selection requires both the validated backend and bundled CLI. Kubernetes or Container Registries selection requires only the validated backend, so a missing bundled CLI does not disable those backend-only targets.
+
 For the backend, the generated rules are one exact-process TLS sniff rule followed by six exact-hostname route rules:
 
 ```json
@@ -766,6 +768,8 @@ The runtime directory persists. The log persists and is truncated when the next 
 
 The helper stores `active-config.sha256` as the SHA-256 identity of the exact configuration bytes loaded when the current sing-box process was launched. A repeated Start with a verified live PID reuses that process only when the stored identity matches the newly validated configuration. A changed, missing, or malformed identity triggers a controlled termination and restart after the new configuration passes `sing-box check`. Successful Stop removes the PID, configuration, and active identity. This metadata contains no access key, password, target details, or duplicate configuration.
 
+If PID or active-digest persistence fails after launch, the helper terminates the process it just launched and waits for confirmed exit. Confirmed exit permits cleanup and returns the original persistence error. If exit cannot be confirmed, the helper retains its in-memory process reference and any durable PID metadata, preserves the runtime config, blocks another Start, and lets Stop retry termination through that exact process reference. This fail-closed ownership is limited to the lifetime of the current helper; it does not add process scanning, birth identity, or a new runtime metadata format. Start also revalidates the launched PID, root owner, and exact command identity after both metadata writes and before reporting success.
+
 An abnormal exit can therefore leave credentials in a root-owned `0600` file. After confirming SeparateProxy is stopped, it may be removed with:
 
 ```bash
@@ -851,7 +855,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart and failure handling, secure digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, separate Docker backend and bundled-CLI discovery capabilities, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart and post-launch metadata failure handling, secure runtime-file negative cases and digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 

@@ -10,6 +10,7 @@ enum SingBoxControllerError: LocalizedError {
     case launchFailed(String)
     case recordedProcessMismatch
     case stopTimedOut
+    case unresolvedLifecycle(String)
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +26,8 @@ enum SingBoxControllerError: LocalizedError {
             return "The recorded PID does not match this helper's sing-box process. No process was stopped."
         case .stopTimedOut:
             return "sing-box did not stop within five seconds."
+        case let .unresolvedLifecycle(message):
+            return "sing-box lifecycle is unresolved: \(message)"
         }
     }
 }
@@ -65,6 +68,7 @@ protocol SingBoxProcessManaging: AnyObject {
     ) throws -> SingBoxManagedProcess
     func terminate(pid: pid_t) throws
     func waitForExit(pid: pid_t, expectedCommand: String) throws -> Bool
+    func waitForExit(process: SingBoxManagedProcess) throws -> Bool
 }
 
 private final class FoundationSingBoxProcess: SingBoxManagedProcess {
@@ -166,6 +170,16 @@ private final class SystemSingBoxProcessManager: SingBoxProcessManaging {
         return false
     }
 
+    func waitForExit(process: SingBoxManagedProcess) throws -> Bool {
+        for _ in 0..<50 {
+            if !process.isRunning {
+                return true
+            }
+            usleep(100_000)
+        }
+        return !process.isRunning
+    }
+
     private func runAndCapture(
         executableURL: URL,
         arguments: [String]
@@ -193,6 +207,7 @@ final class SingBoxController {
     private let processManager: SingBoxProcessManaging
     private let singBoxURL: URL
     private var launchedProcess: SingBoxManagedProcess?
+    private var launchedProcessLifecycleIsUnresolved = false
 
     convenience init(runtimeStore: SecureRuntimeStore) throws {
         let helperURL = try Self.currentExecutableURL()
@@ -251,6 +266,7 @@ final class SingBoxController {
     }
 
     func state() throws -> ProxyState {
+        try clearExitedUnresolvedProcessIfNeeded()
         if let process = launchedProcess, process.isRunning {
             return .running
         }
@@ -264,6 +280,10 @@ final class SingBoxController {
     }
 
     func start(configurationData: Data, redacting secrets: [String]) throws -> pid_t {
+        try clearExitedUnresolvedProcessIfNeeded()
+        guard !launchedProcessLifecycleIsUnresolved else {
+            throw unresolvedLifecycleError()
+        }
         try runtimeStore.writeConfig(configurationData)
         do {
             try checkConfiguration(redacting: secrets)
@@ -271,12 +291,18 @@ final class SingBoxController {
                 digest: Self.configurationDigest(for: configurationData)
             )
         } catch {
-            try? runtimeStore.removeConfig()
+            if !launchedProcessLifecycleIsUnresolved {
+                try? runtimeStore.removeConfig()
+            }
             throw error
         }
     }
 
     func stop() throws {
+        if launchedProcessLifecycleIsUnresolved {
+            try stopUnresolvedLaunchedProcess()
+            return
+        }
         guard let pid = try runtimeStore.readPID() else {
             try runtimeStore.removeConfig()
             try runtimeStore.removeActiveConfigDigest()
@@ -354,6 +380,7 @@ final class SingBoxController {
             try runtimeStore.removeConfig()
         }
         launchedProcess = nil
+        launchedProcessLifecycleIsUnresolved = false
     }
 
     private func launchCheckedConfiguration(digest: String) throws -> pid_t {
@@ -370,28 +397,120 @@ final class SingBoxController {
             throw SingBoxControllerError.launchFailed("the process exited immediately")
         }
 
+        launchedProcess = process
+        launchedProcessLifecycleIsUnresolved = true
         do {
             try runtimeStore.writePID(process.processIdentifier)
             try runtimeStore.writeActiveConfigDigest(digest)
-            launchedProcess = process
-            return process.processIdentifier
         } catch {
-            if process.isRunning {
-                process.terminate()
-                let exited = (try? processManager.waitForExit(
-                    pid: process.processIdentifier,
-                    expectedCommand: expectedCommand
-                )) == true
-                if exited {
-                    try? runtimeStore.removePID()
-                }
-            } else {
-                try? runtimeStore.removePID()
+            let metadataError = error
+            guard rollbackLaunchedProcess(process) else {
+                throw unresolvedLifecycleError(causedBy: metadataError)
             }
-            try? runtimeStore.removeActiveConfigDigest()
-            launchedProcess = nil
-            throw error
+            throw metadataError
         }
+
+        guard process.isRunning else {
+            clearRuntimeIdentityAfterConfirmedExit()
+            launchedProcess = nil
+            launchedProcessLifecycleIsUnresolved = false
+            throw SingBoxControllerError.launchFailed("the process exited before startup completed")
+        }
+
+        do {
+            guard try processManager.matchesExpectedProcess(
+                pid: process.processIdentifier,
+                expectedCommand: expectedCommand
+            ) else {
+                throw SingBoxControllerError.recordedProcessMismatch
+            }
+        } catch {
+            if !process.isRunning {
+                clearRuntimeIdentityAfterConfirmedExit()
+                launchedProcess = nil
+                launchedProcessLifecycleIsUnresolved = false
+                throw error
+            }
+            throw unresolvedLifecycleError(causedBy: error)
+        }
+
+        launchedProcessLifecycleIsUnresolved = false
+        return process.processIdentifier
+    }
+
+    private func clearExitedUnresolvedProcessIfNeeded() throws {
+        guard launchedProcessLifecycleIsUnresolved,
+              let process = launchedProcess else {
+            return
+        }
+        guard !process.isRunning else {
+            return
+        }
+
+        try runtimeStore.removePID()
+        try runtimeStore.removeActiveConfigDigest()
+        try runtimeStore.removeConfig()
+        launchedProcess = nil
+        launchedProcessLifecycleIsUnresolved = false
+    }
+
+    private func stopUnresolvedLaunchedProcess() throws {
+        guard let process = launchedProcess else {
+            throw unresolvedLifecycleError()
+        }
+        if process.isRunning {
+            process.terminate()
+            do {
+                _ = try processManager.waitForExit(process: process)
+            } catch {
+                throw unresolvedLifecycleError(causedBy: error)
+            }
+            guard !process.isRunning else {
+                throw unresolvedLifecycleError(
+                    causedBy: SingBoxControllerError.stopTimedOut
+                )
+            }
+        }
+
+        try runtimeStore.removePID()
+        try runtimeStore.removeActiveConfigDigest()
+        try runtimeStore.removeConfig()
+        launchedProcess = nil
+        launchedProcessLifecycleIsUnresolved = false
+    }
+
+    private func rollbackLaunchedProcess(_ process: SingBoxManagedProcess) -> Bool {
+        if process.isRunning {
+            process.terminate()
+            do {
+                _ = try processManager.waitForExit(process: process)
+            } catch {
+                return false
+            }
+            guard !process.isRunning else {
+                return false
+            }
+        }
+
+        clearRuntimeIdentityAfterConfirmedExit()
+        launchedProcess = nil
+        launchedProcessLifecycleIsUnresolved = false
+        return true
+    }
+
+    private func clearRuntimeIdentityAfterConfirmedExit() {
+        try? runtimeStore.removePID()
+        try? runtimeStore.removeActiveConfigDigest()
+    }
+
+    private func unresolvedLifecycleError(
+        causedBy error: Error? = nil
+    ) -> SingBoxControllerError {
+        let detail = error?.localizedDescription
+            ?? "the helper still owns a process whose exit has not been confirmed"
+        return .unresolvedLifecycle(
+            "\(detail). Stop the proxy before trying to start it again."
+        )
     }
 
     private func sanitize(_ message: String, secrets: [String]) -> String {

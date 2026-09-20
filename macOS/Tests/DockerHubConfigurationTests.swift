@@ -217,6 +217,38 @@ final class DockerHubConfigurationTests: XCTestCase {
         }
     }
 
+    func testInvalidBackendInstallationIsRejectedForBackendOnlyTargets() {
+        let invalidBackend = DockerDesktopBackendInstallation(
+            applicationBundlePath: dockerInstallation.applicationBundlePath,
+            backendExecutablePath: "/usr/local/bin/com.docker.backend"
+        )
+
+        XCTAssertThrowsError(try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            kubernetesInstallation: invalidBackend
+        )) { error in
+            XCTAssertEqual(
+                error as? SingBoxConfigurationError,
+                .invalidDockerHubInstallation
+            )
+        }
+        XCTAssertThrowsError(try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: nil,
+            codexExecutablePath: nil,
+            vsCodePluginHelperExecutablePath: nil,
+            containerRegistriesInstallation: invalidBackend
+        )) { error in
+            XCTAssertEqual(
+                error as? SingBoxConfigurationError,
+                .invalidDockerHubInstallation
+            )
+        }
+    }
+
     func testEnabledDiscoveryFailureIsAtomicBeforeConfigurationGeneration() {
         XCTAssertThrowsError(try DockerHubDiscovery.resolveIfEnabled(true) {
             throw DockerHubDiscoveryError.notInstalled
@@ -316,7 +348,7 @@ final class DockerHubConfigurationTests: XCTestCase {
             codexExecutablePath: nil,
             vsCodePluginHelperExecutablePath: nil,
             dockerHubInstallation: dockerInstallation,
-            kubernetesInstallation: dockerInstallation
+            kubernetesInstallation: dockerInstallation.backendInstallation
         )
         let backendPattern = try exactRegex(for: dockerInstallation.backendExecutablePath)
         let backendRules = configuration.route.rules.filter {
@@ -361,7 +393,7 @@ final class DockerHubConfigurationTests: XCTestCase {
             codexExecutablePath: codexPath,
             vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
             gitInstallation: gitInstallation,
-            kubernetesInstallation: dockerInstallation,
+            kubernetesInstallation: dockerInstallation.backendInstallation,
             homebrewEnabled: true,
             proxyWebsiteHostnames: ["chatgpt.com"]
         )
@@ -430,7 +462,7 @@ final class DockerHubConfigurationTests: XCTestCase {
                     codexExecutablePath: nil,
                     vsCodePluginHelperExecutablePath: nil,
                     dockerHubInstallation: dockerInstallation,
-                    containerRegistriesInstallation: dockerInstallation
+                    containerRegistriesInstallation: dockerInstallation.backendInstallation
                 ),
                 DockerHubRoutePolicy.backendHostnames
                     + ContainerRegistriesRoutePolicy.backendHostnames,
@@ -442,8 +474,8 @@ final class DockerHubConfigurationTests: XCTestCase {
                     chromeBundlePath: nil,
                     codexExecutablePath: nil,
                     vsCodePluginHelperExecutablePath: nil,
-                    kubernetesInstallation: dockerInstallation,
-                    containerRegistriesInstallation: dockerInstallation
+                    kubernetesInstallation: dockerInstallation.backendInstallation,
+                    containerRegistriesInstallation: dockerInstallation.backendInstallation
                 ),
                 KubernetesRoutePolicy.backendHostnames
                     + ContainerRegistriesRoutePolicy.backendHostnames,
@@ -456,8 +488,8 @@ final class DockerHubConfigurationTests: XCTestCase {
                     codexExecutablePath: nil,
                     vsCodePluginHelperExecutablePath: nil,
                     dockerHubInstallation: dockerInstallation,
-                    kubernetesInstallation: dockerInstallation,
-                    containerRegistriesInstallation: dockerInstallation
+                    kubernetesInstallation: dockerInstallation.backendInstallation,
+                    containerRegistriesInstallation: dockerInstallation.backendInstallation
                 ),
                 DockerHubRoutePolicy.backendHostnames
                     + KubernetesRoutePolicy.backendHostnames
@@ -523,14 +555,14 @@ final class DockerHubConfigurationTests: XCTestCase {
                 codexExecutablePath: nil,
                 vsCodePluginHelperExecutablePath: nil,
                 dockerHubInstallation: dockerInstallation,
-                kubernetesInstallation: dockerInstallation
+                kubernetesInstallation: dockerInstallation.backendInstallation
             ),
             try SingBoxConfigurationBuilder.make(
                 outline: outline,
                 chromeBundlePath: nil,
                 codexExecutablePath: nil,
                 vsCodePluginHelperExecutablePath: nil,
-                kubernetesInstallation: dockerInstallation,
+                kubernetesInstallation: dockerInstallation.backendInstallation,
                 homebrewEnabled: true,
                 homebrewGitInstallation: gitInstallation
             ),
@@ -540,21 +572,21 @@ final class DockerHubConfigurationTests: XCTestCase {
                 codexExecutablePath: nil,
                 vsCodePluginHelperExecutablePath: nil,
                 gitInstallation: gitInstallation,
-                kubernetesInstallation: dockerInstallation
+                kubernetesInstallation: dockerInstallation.backendInstallation
             ),
             try SingBoxConfigurationBuilder.make(
                 outline: outline,
                 chromeBundlePath: nil,
                 codexExecutablePath: codexPath,
                 vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
-                kubernetesInstallation: dockerInstallation
+                kubernetesInstallation: dockerInstallation.backendInstallation
             ),
             try SingBoxConfigurationBuilder.make(
                 outline: outline,
                 chromeBundlePath: chromePath,
                 codexExecutablePath: nil,
                 vsCodePluginHelperExecutablePath: nil,
-                kubernetesInstallation: dockerInstallation,
+                kubernetesInstallation: dockerInstallation.backendInstallation,
                 proxyWebsiteHostnames: ["chatgpt.com"]
             ),
         ]
@@ -576,15 +608,15 @@ final class DockerHubConfigurationTests: XCTestCase {
                 codexExecutablePath: nil,
                 vsCodePluginHelperExecutablePath: nil,
                 dockerHubInstallation: dockerInstallation,
-                containerRegistriesInstallation: dockerInstallation
+                containerRegistriesInstallation: dockerInstallation.backendInstallation
             ),
             try SingBoxConfigurationBuilder.make(
                 outline: outline,
                 chromeBundlePath: nil,
                 codexExecutablePath: nil,
                 vsCodePluginHelperExecutablePath: nil,
-                kubernetesInstallation: dockerInstallation,
-                containerRegistriesInstallation: dockerInstallation
+                kubernetesInstallation: dockerInstallation.backendInstallation,
+                containerRegistriesInstallation: dockerInstallation.backendInstallation
             ),
             try SingBoxConfigurationBuilder.make(
                 outline: outline,
@@ -592,8 +624,8 @@ final class DockerHubConfigurationTests: XCTestCase {
                 codexExecutablePath: nil,
                 vsCodePluginHelperExecutablePath: nil,
                 dockerHubInstallation: dockerInstallation,
-                kubernetesInstallation: dockerInstallation,
-                containerRegistriesInstallation: dockerInstallation
+                kubernetesInstallation: dockerInstallation.backendInstallation,
+                containerRegistriesInstallation: dockerInstallation.backendInstallation
             ),
         ]
 
@@ -640,7 +672,7 @@ final class DockerHubConfigurationTests: XCTestCase {
             chromeBundlePath: nil,
             codexExecutablePath: nil,
             vsCodePluginHelperExecutablePath: nil,
-            kubernetesInstallation: dockerInstallation
+            kubernetesInstallation: dockerInstallation.backendInstallation
         )
     }
 
@@ -650,7 +682,7 @@ final class DockerHubConfigurationTests: XCTestCase {
             chromeBundlePath: nil,
             codexExecutablePath: nil,
             vsCodePluginHelperExecutablePath: nil,
-            containerRegistriesInstallation: dockerInstallation
+            containerRegistriesInstallation: dockerInstallation.backendInstallation
         )
     }
 

@@ -76,8 +76,8 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
     @Published private(set) var gitTargetState: GitTargetState = .notFound
     @Published private(set) var dockerHubTargetState: DockerHubTargetState = .notFound
-    @Published private(set) var kubernetesTargetState: DockerHubTargetState = .notFound
-    @Published private(set) var containerRegistriesTargetState: DockerHubTargetState = .notFound
+    @Published private(set) var kubernetesTargetState: DockerBackendTargetState = .notFound
+    @Published private(set) var containerRegistriesTargetState: DockerBackendTargetState = .notFound
     @Published private(set) var homebrewTargetState: HomebrewTargetState = .notFound
     @Published private(set) var vsCodeBundleURL: URL?
     @Published private(set) var state: ProxyState = .helperNotInstalled {
@@ -278,18 +278,6 @@ final class ProxyViewModel: ObservableObject {
         return codexTargetState.detail
     }
 
-    var chromeDNSConfigureButtonTitle: String {
-        chromeDNSManager.isChromeRunning()
-            ? "Quit and Configure Chrome"
-            : "Configure Chrome DNS"
-    }
-
-    var chromeDNSRemoveButtonTitle: String {
-        chromeDNSManager.isChromeRunning()
-            ? "Quit and Remove Chrome DNS Integration"
-            : "Remove Chrome DNS Integration"
-    }
-
     func saveAccessKey() {
         var candidate: String? = accessKeyInput
         defer {
@@ -349,16 +337,12 @@ final class ProxyViewModel: ObservableObject {
         stopTrafficPolling()
     }
 
-    func configureChromeDNS() {
-        beginChromeDNSOperation(.configure)
-    }
-
     func removeChromeDNSIntegration() {
         if chromeDNSState == .modifiedExternally {
-            performChromeDNSOperation(.remove, reopenChrome: false)
+            performChromeDNSRemoval(reopenChrome: false)
             return
         }
-        beginChromeDNSOperation(.remove)
+        beginChromeDNSRemoval()
     }
 
     func addProxyWebsite() {
@@ -582,10 +566,10 @@ final class ProxyViewModel: ObservableObject {
         chrome = ApplicationDiscovery.findGoogleChrome()
         codexTargetState = CodexTargetDiscovery.discover()
         gitTargetState = GitTargetDiscovery.discover()
-        let dockerDesktopTargetState = DockerHubTargetDiscovery.discover()
-        dockerHubTargetState = dockerDesktopTargetState
-        kubernetesTargetState = dockerDesktopTargetState
-        containerRegistriesTargetState = dockerDesktopTargetState
+        dockerHubTargetState = DockerHubTargetDiscovery.discover()
+        let dockerBackendTargetState = DockerBackendTargetDiscovery.discover()
+        kubernetesTargetState = dockerBackendTargetState
+        containerRegistriesTargetState = dockerBackendTargetState
         homebrewTargetState = HomebrewTargetDiscovery.discover()
         if !codexTargetState.canSelect {
             codexIsSelected = false
@@ -724,15 +708,10 @@ final class ProxyViewModel: ObservableObject {
         }
     }
 
-    private enum ChromeDNSOperation {
-        case configure
-        case remove
-    }
-
-    private func beginChromeDNSOperation(_ operation: ChromeDNSOperation) {
+    private func beginChromeDNSRemoval() {
         let chromeWasRunning = chromeDNSManager.isChromeRunning()
         guard chromeWasRunning else {
-            performChromeDNSOperation(operation, reopenChrome: false)
+            performChromeDNSRemoval(reopenChrome: false)
             return
         }
 
@@ -744,19 +723,17 @@ final class ProxyViewModel: ObservableObject {
             return
         }
         waitForChromeToExit(
-            operation,
             reopenChrome: true,
             attemptsRemaining: 80
         )
     }
 
     private func waitForChromeToExit(
-        _ operation: ChromeDNSOperation,
         reopenChrome: Bool,
         attemptsRemaining: Int
     ) {
         guard chromeDNSManager.isChromeRunning() else {
-            performChromeDNSOperation(operation, reopenChrome: reopenChrome)
+            performChromeDNSRemoval(reopenChrome: reopenChrome)
             return
         }
         guard attemptsRemaining > 0 else {
@@ -767,42 +744,28 @@ final class ProxyViewModel: ObservableObject {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             self?.waitForChromeToExit(
-                operation,
                 reopenChrome: reopenChrome,
                 attemptsRemaining: attemptsRemaining - 1
             )
         }
     }
 
-    private func performChromeDNSOperation(
-        _ operation: ChromeDNSOperation,
-        reopenChrome: Bool
-    ) {
+    private func performChromeDNSRemoval(reopenChrome: Bool) {
         chromeDNSState = .configuring
-        chromeDNSMessage = operation == .configure
-            ? "Configuring Chrome DNS integration..."
-            : "Removing Chrome DNS integration..."
+        chromeDNSMessage = "Removing Chrome DNS integration..."
 
         do {
-            switch operation {
-            case .configure:
-                try chromeDNSManager.configure()
-                chromeDNSState = .configured
-                chromeDNSCanRemove = chromeDNSManager.hasRestorableIntegration()
-                chromeDNSMessage = Self.chromeDNSSafetyMessage
-            case .remove:
-                switch try chromeDNSManager.removeIntegration() {
-                case .removed:
-                    refreshChromeDNSState()
-                    chromeDNSMessage = "The original Chrome DNS preferences were restored."
-                case .settingsChangedExternally:
-                    chromeDNSState = .modifiedExternally
-                    chromeDNSCanRemove = false
-                    chromeDNSMessage = "Chrome DNS settings changed externally. SeparateProxy did not overwrite them."
-                case .notConfigured:
-                    refreshChromeDNSState()
-                    chromeDNSMessage = "No SeparateProxy Chrome DNS integration record was found."
-                }
+            switch try chromeDNSManager.removeIntegration() {
+            case .removed:
+                refreshChromeDNSState()
+                chromeDNSMessage = "The original Chrome DNS preferences were restored."
+            case .settingsChangedExternally:
+                chromeDNSState = .modifiedExternally
+                chromeDNSCanRemove = false
+                chromeDNSMessage = "Chrome DNS settings changed externally. SeparateProxy did not overwrite them."
+            case .notConfigured:
+                refreshChromeDNSState()
+                chromeDNSMessage = "No SeparateProxy Chrome DNS integration record was found."
             }
 
             if reopenChrome {
@@ -857,8 +820,6 @@ final class ProxyViewModel: ObservableObject {
             chromeECHMessage = reason
         }
     }
-
-    private static let chromeDNSSafetyMessage = "Chrome prefers Cloudflare DoH. If DoH is unavailable in automatic mode, Chrome may fall back to the macOS system resolver."
 
     private func refreshHelperState() {
         switch helperService.status {
