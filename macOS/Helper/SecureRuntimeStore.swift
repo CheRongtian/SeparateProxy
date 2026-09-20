@@ -22,13 +22,28 @@ enum SecureRuntimeStoreError: LocalizedError {
 }
 
 final class SecureRuntimeStore {
-    let baseURL = URL(fileURLWithPath: "/Library/Application Support/SeparateProxy", isDirectory: true)
+    let baseURL: URL
     lazy var runtimeURL = baseURL.appendingPathComponent("runtime", isDirectory: true)
     lazy var configURL = runtimeURL.appendingPathComponent("config.json", isDirectory: false)
     lazy var logURL = runtimeURL.appendingPathComponent("sing-box.log", isDirectory: false)
     lazy var pidURL = runtimeURL.appendingPathComponent("sing-box.pid", isDirectory: false)
+    lazy var activeConfigDigestURL = runtimeURL.appendingPathComponent(
+        "active-config.sha256",
+        isDirectory: false
+    )
 
-    private let expectedOwner: uid_t = 0
+    private let expectedOwner: uid_t
+
+    init(
+        baseURL: URL = URL(
+            fileURLWithPath: "/Library/Application Support/SeparateProxy",
+            isDirectory: true
+        ),
+        expectedOwner: uid_t = 0
+    ) {
+        self.baseURL = baseURL
+        self.expectedOwner = expectedOwner
+    }
 
     func prepare() throws {
         try ensureSecureDirectory(at: baseURL.path)
@@ -56,6 +71,25 @@ final class SecureRuntimeStore {
             throw SecureRuntimeStoreError.invalidPID
         }
         return pid
+    }
+
+    func writeActiveConfigDigest(_ digest: String) throws {
+        guard Self.isValidSHA256Digest(digest) else {
+            throw SecureRuntimeStoreError.invalidFile(activeConfigDigestURL.lastPathComponent)
+        }
+        try writeAtomically(Data(digest.utf8), named: activeConfigDigestURL.lastPathComponent)
+    }
+
+    func readActiveConfigDigest() throws -> String? {
+        guard let data = try readFileIfPresent(
+            named: activeConfigDigestURL.lastPathComponent
+        ),
+        data.count == 64,
+        let digest = String(data: data, encoding: .utf8),
+        Self.isValidSHA256Digest(digest) else {
+            return nil
+        }
+        return digest
     }
 
     func openLogForReplacement() throws -> FileHandle {
@@ -93,6 +127,16 @@ final class SecureRuntimeStore {
 
     func removePID() throws {
         try removeFileIfPresent(named: pidURL.lastPathComponent)
+    }
+
+    func removeActiveConfigDigest() throws {
+        try removeFileIfPresent(named: activeConfigDigestURL.lastPathComponent)
+    }
+
+    private static func isValidSHA256Digest(_ digest: String) -> Bool {
+        digest.utf8.count == 64 && digest.utf8.allSatisfy { byte in
+            (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
+        }
     }
 
     private func ensureSecureDirectory(at path: String) throws {

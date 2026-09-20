@@ -202,7 +202,7 @@ With Google disabled and an empty Custom Websites list, only the browser-wide Ch
 
 Custom Websites retains its 100-host product limit. The 11 built-in Google hostnames do not consume that quota. After merging and deduplication, the helper and Core accept at most 111 validated effective exact hostnames. A Custom entry that duplicates a built-in Google hostname produces one route pair while remaining stored as Custom data, so it continues to work after Google is disabled.
 
-List changes are saved immediately and apply to the next Start that actually launches a new sing-box process. A normal complete Stop followed by Start launches a new process and loads the new config. In the abnormal stale-process case, the helper can write and check a new config while the controller returns an already-running recorded PID; that process keeps its previously loaded in-memory config. Existing HTTP/2, HTTP/3, TLS, or QUIC connections can also retain their previous route until they reconnect. Restarting Chrome gives the cleanest deterministic application of a changed list.
+List changes are saved immediately and apply on the next Start. The helper validates the newly generated configuration and compares its exact-byte SHA-256 identity with the identity persisted for a verified running sing-box process. An unchanged identity safely reuses the existing PID; a changed or unknown identity triggers a controlled restart so the running process loads the new config. Existing HTTP/2, HTTP/3, TLS, or QUIC connections can retain their previous route until they reconnect. Restarting Chrome gives the cleanest deterministic application of a changed list.
 
 ### Codex-only route
 
@@ -746,6 +746,7 @@ The SwiftUI app/helper use:
 /Library/Application Support/SeparateProxy/runtime/config.json
 /Library/Application Support/SeparateProxy/runtime/sing-box.log
 /Library/Application Support/SeparateProxy/runtime/sing-box.pid
+/Library/Application Support/SeparateProxy/runtime/active-config.sha256
 /Library/Application Support/SeparateProxy/runtime/traffic.sock
 ```
 
@@ -762,6 +763,8 @@ Runtime config contains the parsed Outline server, port, method, and password:
 - PID mismatch or stop timeout leaves it in place while process ownership is uncertain.
 
 The runtime directory persists. The log persists and is truncated when the next launch reaches log opening. PID can remain after unexpected exit until later cleanup.
+
+The helper stores `active-config.sha256` as the SHA-256 identity of the exact configuration bytes loaded when the current sing-box process was launched. A repeated Start with a verified live PID reuses that process only when the stored identity matches the newly validated configuration. A changed, missing, or malformed identity triggers a controlled termination and restart after the new configuration passes `sing-box check`. Successful Stop removes the PID, configuration, and active identity. This metadata contains no access key, password, target details, or duplicate configuration.
 
 An abnormal exit can therefore leave credentials in a root-owned `0600` file. After confirming SeparateProxy is stopped, it may be removed with:
 
@@ -848,7 +851,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, Docker.app discovery and nested-executable validation, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart and failure handling, secure digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -1065,7 +1068,7 @@ Git history contains only a small number of coarse project stages and does not p
 - Docker backend or bundled CLI Outline outbound to an allowlisted `hostname:443`: strong evidence that exact process, TLS hostname, and per-domain destination recovery all matched; no such runtime evidence is claimed yet.
 - UI `Running`: last helper reply; not continuous liveness proof.
 - Expected rules in the current on-disk `runtime/config.json`: disk-config evidence only; it does not prove that the running sing-box process loaded that file version.
-- A successful Start reply that returns an already-running recorded PID: process-presence evidence; it does not prove that newly written configuration was loaded.
+- A successful Start reply that reuses an already-running recorded PID: the helper verified the process identity and matched the newly validated exact configuration bytes to that PID's persisted active identity.
 - Chrome browses: functionality works; another global proxy may still be responsible.
 - Codex enters Outline: route worked; its original DNS-derived destination may still be wrong.
 
@@ -1159,7 +1162,7 @@ Legacy and current helpers under different labels/MachServices could coexist. Cu
 
 ### UI Running is not continuous liveness proof
 
-The app refreshes at launch, after operations, and on manual refresh; it does not poll. Unexpected sing-box exit can leave UI temporarily `Running`. The next helper status validates tracked process state, PID, root UID, and exact command, so manual refresh corrects it when the helper responds. A successful Start reply returning an already-running recorded PID still does not prove that the process loaded a newly written config.
+The app refreshes at launch, after operations, and on manual refresh; it does not poll. Unexpected sing-box exit can leave UI temporarily `Running`. The next helper status validates tracked process state, PID, root UID, and exact command, so manual refresh corrects it when the helper responds. Start reuses an already-running recorded PID only after the newly validated exact configuration bytes match that PID's persisted active identity.
 
 ## Diagnostic decision tree
 

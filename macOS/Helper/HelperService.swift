@@ -4,13 +4,11 @@ import SeparateProxyCore
 
 final class HelperService: NSObject, SeparateProxyHelperProtocol {
     private let queue = DispatchQueue(label: "com.cherongtian.SeparateProxy.Helper.operations")
-    private let runtimeStore: SecureRuntimeStore
     private let controller: SingBoxController
     private let trafficAccountingReader: TrafficAccountingReader
 
     override init() {
         let runtimeStore = SecureRuntimeStore()
-        self.runtimeStore = runtimeStore
         trafficAccountingReader = TrafficAccountingReader()
         do {
             controller = try SingBoxController(runtimeStore: runtimeStore)
@@ -125,21 +123,16 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         proxyWebsiteHostnames: validatedProxyWebsiteHostnames
                     )
                 }
-                try self.runtimeStore.writeConfig(configuration.encodedJSON())
-                do {
-                    try self.controller.checkConfiguration(
-                        redacting: [accessKey, outline.password]
-                    )
-                    let pid = try self.controller.start()
-                    reply(self.reply(
-                        success: true,
-                        state: .running,
-                        message: "The proxy is running. PID: \(pid)."
-                    ))
-                } catch {
-                    try? self.runtimeStore.removeConfig()
-                    throw error
-                }
+                let configurationData = try configuration.encodedJSON()
+                let pid = try self.controller.start(
+                    configurationData: configurationData,
+                    redacting: [accessKey, outline.password]
+                )
+                reply(self.reply(
+                    success: true,
+                    state: .running,
+                    message: "The proxy is running. PID: \(pid)."
+                ))
             } catch {
                 reply(self.reply(success: false, state: .error, message: error.localizedDescription))
             }
