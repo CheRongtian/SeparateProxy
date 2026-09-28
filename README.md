@@ -41,7 +41,7 @@ The macOS app provides:
 - up to 100 user-configured exact Proxy Website hostnames;
 - active OpenAI Codex VS Code extension discovery through VS Code metadata;
 - active Apple/Xcode Git discovery through the system developer-directory selection;
-- Docker Desktop discovery through Launch Services with fixed bundled backend and CLI executables;
+- Docker Desktop discovery through Launch Services with fixed bundled backend and CLI executables; target capability determines whether the backend alone or both backend and CLI are required;
 - default-prefix Homebrew discovery through static filesystem checks;
 - safe migration and conditional restoration of legacy Chrome DNS integration state;
 - conditional Chrome ECH integration for observable website hostnames;
@@ -401,7 +401,7 @@ browser authorization
   -> existing Chrome Website Routing, configured manually by the user
 ```
 
-The intended coverage includes Docker Hub image pull/push transport, registry authentication, covered Docker Desktop Hub/control requests, and the Docker CLI device-code request, polling, and automatic personal-access-token network path. This scope is based on official documentation, static source investigation, retained local process evidence, generated-config tests, and an offline sing-box config check. Docker Hub routing through SeparateProxy has not yet received a manual runtime A/B verification.
+The intended coverage includes Docker Hub image pull/push transport, registry authentication, covered Docker Desktop Hub/control requests, and the Docker CLI device-code request, polling, and automatic personal-access-token network path. This scope is based on official documentation, static source investigation, retained local process evidence, generated-config tests, and an offline sing-box config check. Retained same-flow runtime logs show the exact `com.docker.backend` process reaching Outline for `registry-1.docker.io:443` and `production.cloudfront.docker.com:443`. Complete ON/OFF A/B, every pull and authentication stage, bundled-CLI routing, login, push, browser authorization, and the whole Docker Hub workflow have not been runtime-verified.
 
 The app discovers bundle identifier `com.docker.docker` through Launch Services for display. During every selected Start, the helper repeats discovery independently and treats the result as authoritative. It canonicalizes and verifies the Docker application bundle, then derives only these fixed relative executables:
 
@@ -759,7 +759,7 @@ Runtime config contains the parsed Outline server, port, method, and password:
 - Start writes it atomically before `sing-box check`;
 - check or launch failure removes it;
 - normal Stop removes it after the recorded process exits;
-- Stop with no PID removes it;
+- Stop with no tracked or persisted PID removes it only when the current helper also has no exit-unconfirmed helper-owned launched process;
 - unexpected sing-box exit does not automatically remove it;
 - GUI/helper exit does not itself remove it;
 - PID mismatch or stop timeout leaves it in place while process ownership is uncertain.
@@ -768,7 +768,9 @@ The runtime directory persists. The log persists and is truncated when the next 
 
 The helper stores `active-config.sha256` as the SHA-256 identity of the exact configuration bytes loaded when the current sing-box process was launched. A repeated Start with a verified live PID reuses that process only when the stored identity matches the newly validated configuration. A changed, missing, or malformed identity triggers a controlled termination and restart after the new configuration passes `sing-box check`. Successful Stop removes the PID, configuration, and active identity. This metadata contains no access key, password, target details, or duplicate configuration.
 
-If PID or active-digest persistence fails after launch, the helper terminates the process it just launched and waits for confirmed exit. Confirmed exit permits cleanup and returns the original persistence error. If exit cannot be confirmed, the helper retains its in-memory process reference and any durable PID metadata, preserves the runtime config, blocks another Start, and lets Stop retry termination through that exact process reference. This fail-closed ownership is limited to the lifetime of the current helper; it does not add process scanning, birth identity, or a new runtime metadata format. Start also revalidates the launched PID, root owner, and exact command identity after both metadata writes and before reporting success.
+If PID or active-digest persistence fails after launch, the helper terminates the process it just launched and waits for confirmed exit. A final process verification failure after metadata persistence enters the same fail-closed behavior when the exact launched process still exists or its exit cannot be confirmed. The failed Start is not reported as successful. Confirmed exit permits cleanup and returns the original launch or persistence error. If exit cannot be confirmed, the helper retains its exact in-memory `Process` reference, any durable PID metadata, and the runtime config; another Start remains blocked, and Stop can retry termination through that exact reference. Config, PID, active digest, and in-memory ownership are released only after the corresponding cleanup path has confirmed process exit.
+
+This unresolved ownership is limited to the lifetime of the current helper. It does not add process scanning, process birth identity, orphan adoption, supervisor recovery, or a new durable runtime process record. In particular, it does not eliminate the theoretical crash window between successful process launch and durable PID persistence. Start also revalidates the launched PID, root owner, and exact command identity after both metadata writes and before reporting success.
 
 An abnormal exit can therefore leave credentials in a root-owned `0600` file. After confirming SeparateProxy is stopped, it may be removed with:
 
@@ -786,10 +788,11 @@ Do not delete runtime files while the proxy is running.
 - Runtime directories are root-owned `0700`; runtime files and the accounting socket are root-owned `0600`.
 - Directory checks use `lstat`; file operations use directory-relative descriptors, `O_NOFOLLOW`, regular-file/owner checks, and atomic rename.
 - App and helper constrain XPC peers with bundle identifier and Apple Team ID code-signing requirements.
-- The helper canonicalizes and revalidates the Chrome bundle, performs authoritative Codex discovery, independently discovers and validates Apple/Xcode Git from the active developer directory, and independently validates Docker.app plus its fixed bundled backend and CLI.
+- The helper canonicalizes and revalidates the Chrome bundle, performs authoritative Codex discovery, and independently discovers and validates Apple/Xcode Git from the active developer directory. Every Docker-backed target validates the Docker Desktop bundle and canonical backend. Docker Hub additionally requires and validates the fixed bundled Docker CLI; Kubernetes and Container Registries do not require that CLI.
 - XPC submits fixed target selections, the existing Chrome/VS Code candidate bundle paths, and validated exact Chrome Website Routing hostname strings. It cannot submit a Docker nested executable path, Git helper path, regex, route JSON, process selector, outbound, executable command, shell command, or sing-box argument.
 - The helper derives bundled sing-box relative to its own executable.
-- Stop validates PID, root UID, and exact command before `SIGTERM`.
+- For a PID-backed process, Stop validates PID, root UID, and the exact expected executable command before termination; an identity mismatch is never killed.
+- For an unresolved process launched and still owned by the current helper, Stop terminates through that exact in-memory `Process` reference and confirms that the process itself is no longer running. PID identity mismatch is not treated as confirmed exit; unconfirmed exit retains ownership and config and keeps later Start fail-closed.
 - Helper and legacy scripts never use `pkill` or `killall`.
 - macOS handles administrator credentials; SeparateProxy never stores them.
 
@@ -836,9 +839,20 @@ open macOS/SeparateProxy.xcodeproj
 11. if **Approval Required** appears, use **Open System Settings** and enable SeparateProxy under **Login Items & Extensions > App Background Activity**;
 12. refresh until idle state is `Stopped`, then use **Start Proxy**.
 
-If a legacy SeparateProxy DNS integration record exists, the first Website Routing Start restores the original DNS preferences before starting. Chrome may be closed and reopened so Local State can be updated safely. External DNS changes are preserved. A real migration error is shown and Start remains blocked.
+If a legacy SeparateProxy DNS integration record exists, the first non-empty, hostname-visible Website Routing Start restores the original DNS preferences before starting. This path runs when Google is enabled or Custom Websites is non-empty. Chrome may be closed and reopened so Local State can be updated safely. External DNS changes are preserved. A real migration error is shown and Start remains blocked.
 
-When replacing a build containing an updated helper or sing-box, stop the proxy, disable the existing background item, replace the app, and approve it again if macOS requests it.
+When replacing a build containing an updated helper or sing-box:
+
+1. stop the current proxy session;
+2. in macOS System Settings, disable the old SeparateProxy background item;
+3. replace `/Applications/SeparateProxy.app`;
+4. launch the new app;
+5. if the UI reports that the helper is not installed, use the existing **Enable Helper** action;
+6. if **Approval Required** appears, open System Settings and approve SeparateProxy under **Login Items & Extensions > App Background Activity**;
+7. refresh until the helper state is `Stopped`;
+8. start the proxy again.
+
+The current app has no **Replace Helper** or **Disable Helper** action, no unregister flow, and no automatic helper-binary version replacement workflow. First installation continues to use steps 10–12 above; the System Settings disable-and-replace sequence applies to updates that contain a changed helper or bundled sing-box.
 
 ## Tests
 
@@ -855,7 +869,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, separate Docker backend and bundled-CLI discovery capabilities, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart and post-launch metadata failure handling, secure runtime-file negative cases and digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, separate Docker backend and bundled-CLI discovery capabilities, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart, post-launch metadata persistence failure, helper-owned unresolved in-memory process handling, exit confirmation against the exact `Process` lifetime, identity mismatch not being accepted as confirmed exit, prevention of a second launch while exit remains unconfirmed, cleanup only after confirmed exit, secure runtime-file negative cases and digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -1069,7 +1083,7 @@ Git history contains only a small number of coarse project stages and does not p
 - `outbound/shadowsocks[outline]`: local routing selected Outline; remote connection success is unproven.
 - Codex Outline outbound to `hostname:443`: strong Patch 2 destination-recovery evidence.
 - Apple/Xcode Git helper Outline outbound to `hostname:443`: strong Patch 2 destination-recovery evidence.
-- Docker backend or bundled CLI Outline outbound to an allowlisted `hostname:443`: strong evidence that exact process, TLS hostname, and per-domain destination recovery all matched; no such runtime evidence is claimed yet.
+- Docker backend or bundled CLI Outline outbound to an allowlisted `hostname:443`: strong evidence that exact process, TLS hostname, and per-domain destination recovery all matched. Retained same-flow logs provide this evidence for `com.docker.backend` with `registry-1.docker.io:443` and `production.cloudfront.docker.com:443`; they do not establish complete Docker Hub A/B or workflow coverage.
 - UI `Running`: last helper reply; not continuous liveness proof.
 - Expected rules in the current on-disk `runtime/config.json`: disk-config evidence only; it does not prove that the running sing-box process loaded that file version.
 - A successful Start reply that reuses an already-running recorded PID: the helper verified the process identity and matched the newly validated exact configuration bytes to that PID's persisted active identity.
@@ -1109,6 +1123,14 @@ Option 3 removes the fixed DoH route. Ordinary sites retain Chrome's current/loc
 Logs showed repeated Chrome IPv6 attempts failing before successful outbound selection. Configured website flows reached the late domain-specific IPv6 reject and reset before outbound, while Direct IPv6 attempts repeatedly failed with `no route to host`. The late reject did not reliably trigger the intended IPv4 fallback.
 
 Website Routing therefore retains the earlier browser-wide Chrome IPv6 reject before all sniff rules. It exists only to trigger IPv4 fallback. After that retry, configured exact hostnames use Outline and ordinary Chrome websites remain Direct. This finding applies to the tested Chrome/macOS environment and is not copied to Codex or other targets.
+
+### Resolved runtime regression: unmatched Direct IPv6 on IPv4-only uplinks
+
+The TUN is dual-stack, while the physical uplink in this reproduction had no usable IPv6 path. The broad TUN IPv6 route therefore allowed unmatched Direct applications to attempt public IPv6 even though the sing-box Direct outbound could not create a real IPv6 uplink. Those attempts produced connection failures or timeouts. Dual-stack applications could consequently stall or fail while the same applications, with SeparateProxy inactive, quickly used IPv4.
+
+The generated policy now appends one generic IPv6 reject after every explicit target rule. Selected target traffic gets its normal opportunity to match first. Remaining IPv6 fails quickly so a dual-stack application can retry over IPv4, while `route.final` remains `direct` for unmatched IPv4. This final guard is distinct from the earlier Chrome-specific reject: the Chrome rule runs before Chrome hostname sniffing and routing to preserve the tested browser fallback behavior, while the generic rule runs last and applies only to IPv6 left unmatched by every explicit target rule.
+
+The V1 tradeoff is deliberate: while SeparateProxy is active, IPv6-only Direct destinations are unsupported by this fallback behavior.
 
 ### Investigated source-level risk: multi-packet QUIC sniff replay order
 
@@ -1166,7 +1188,7 @@ Legacy and current helpers under different labels/MachServices could coexist. Cu
 
 ### UI Running is not continuous liveness proof
 
-The app refreshes at launch, after operations, and on manual refresh; it does not poll. Unexpected sing-box exit can leave UI temporarily `Running`. The next helper status validates tracked process state, PID, root UID, and exact command, so manual refresh corrects it when the helper responds. Start reuses an already-running recorded PID only after the newly validated exact configuration bytes match that PID's persisted active identity.
+The app refreshes at launch, after operations, and on manual refresh; it does not poll. Unexpected sing-box exit can leave UI temporarily `Running`. When the current helper still owns a live launched `Process`, status can use that exact in-memory ownership. Recovery from a persisted PID validates the PID, root UID, and exact command identity. Manual refresh corrects stale UI when the helper responds. Start reuses an already-running recorded PID only after the newly validated exact configuration bytes match that PID's persisted active identity.
 
 ## Diagnostic decision tree
 
@@ -1320,9 +1342,40 @@ Strong same-flow log evidence, when retained, is an exact `git-remote-https` or 
 
 ### Docker Hub
 
-Docker Hub routing was not runtime-tested during implementation. A later manual verification should correlate one exact backend or bundled-CLI process path with an Outline outbound to one documented exact hostname. Pull, push, login, and browser authorization cross different process boundaries, so success in one path does not prove the others.
+Retained same-flow runtime logs correlate the exact `com.docker.backend` process with Outline outbounds to `registry-1.docker.io:443` and `production.cloudfront.docker.com:443`. This is limited backend process/domain/outbound evidence. It does not establish complete ON/OFF A/B, every manifest/blob/authentication stage, bundled-CLI routing, login, push, browser authorization, or the whole Docker Hub workflow.
+
+A complete manual verification should compare the same selected matching flow with Docker Hub ON and OFF and should correlate one exact backend or bundled-CLI process path with an Outline or Direct outbound to one documented exact hostname. Pull, push, login, and browser authorization cross different process boundaries, so success in one path does not prove the others.
 
 For browser authorization, the Docker Hub target alone is intentionally insufficient. Configure exact login hosts through Chrome Custom Websites; enable the independent Google option when the browser flow uses Google-side authorization. Evaluate only the hostnames observed in that browser flow. Do not infer whole-container or third-party-registry support from a successful Docker Hub request.
+
+### Kubernetes
+
+This verification applies only to local Kubernetes image transport backed by Docker Desktop. The expected macOS process is the validated `com.docker.backend`. Matching examples include exact `registry.k8s.io`, `cdn.registry.k8s.io`, and one exact `<location>-docker.pkg.dev` hostname from the documented built-in set. With Kubernetes selected, a matching TCP/443 flow should use Outline. An unmatched backend IPv4 hostname should remain Direct.
+
+Retained logs show Outline hostname/outbound lines for `registry.k8s.io:443` and `us-east1-docker.pkg.dev:443`. They do not retain the same-flow process-path line or a complete ON/OFF A/B, so their evidence level is hostname/outbound evidence only.
+
+No suffix or wildcard behavior is guaranteed. A remote cluster pulls images from its remote nodes, outside the reach of the local SeparateProxy instance. This target's verification scope is a Docker Desktop-backed local cluster; it does not establish behavior for Colima, OrbStack, remote nodes, or other unvalidated runtimes.
+
+### Container Registries
+
+The expected process is the validated `com.docker.backend`, and the only target hostname is exact `gcr.io` over TCP/443. With Container Registries selected, that exact matching flow should use Outline. `us.gcr.io`, other `*.gcr.io` names, Artifact Registry hostnames, and unrelated registries should remain Direct over IPv4 unless another independently selected target covers them.
+
+This is an exact `gcr.io` check, not verification of a general GCR or Artifact Registry policy. No completed process/domain/outbound A/B evidence is claimed here.
+
+### Homebrew
+
+For API metadata and Core bottle transport, verify the fixed process `/usr/bin/curl` separately against each built-in exact hostname:
+
+```text
+formulae.brew.sh
+ghcr.io
+pkg-containers.githubusercontent.com
+api.github.com
+```
+
+When the independent Git target is disabled, Homebrew self-update uses the validated Apple/Xcode Git HTTPS helper and exact `github.com`. Bottle transport and self-update therefore have separate process boundaries and should be evaluated separately. A small bottle-oriented candidate is `HOMEBREW_NO_AUTO_UPDATE=1 brew fetch --force hello`; `brew update` exercises the self-update boundary. These are optional future runtime checks, and no complete Homebrew A/B evidence is claimed here.
+
+The target does not cover arbitrary Cask vendors, source builds, custom taps, custom mirrors, brewed curl/Git, or arbitrary formula resource and patch downloads. Matching one built-in path does not establish all Homebrew operations.
 
 ## Rejected alternatives
 
@@ -1376,7 +1429,7 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - Docker Hub V1 covers only the six documented backend hostnames and two bundled-CLI login hostnames over TLS TCP/443. It does not cover all container traffic, third-party registries, UDP, plain HTTP, custom HTTPS ports, or arbitrary Docker CLI destinations.
 - Docker backend and CLI hostname classification depends on observable TLS SNI. Missing SNI or an unmatched IPv4 hostname remains Direct.
 - Docker browser authorization remains a separate Chrome Website Routing concern and may require multiple manually observed exact hostnames.
-- Docker Hub routing has generated-config and offline sing-box validation only; manual runtime A/B evidence has not yet been recorded.
+- Docker Hub has retained same-flow backend/Outline evidence for exact `registry-1.docker.io:443` and `production.cloudfront.docker.com:443`. Complete ON/OFF A/B, all pull/auth stages, bundled-CLI routing, login, push, browser authorization, and whole-workflow acceptance have not been recorded.
 - Kubernetes V1 supports Docker Desktop-backed local clusters and only the 48 documented official-registry transport hostnames. Arbitrary workload registries, remote-node pulls, Colima, OrbStack, and unvalidated minikube providers remain outside its scope.
 - Kubernetes classification depends on observable TLS SNI from the shared `com.docker.backend` process. It cannot distinguish Docker CLI, Compose, kind, built-in Kubernetes, or other VM/container provenance when they contact the same exact hostname.
 - Container Registries V1 covers only exact `gcr.io` through the shared Docker backend. IPv4 traffic to subdomains such as `us.gcr.io`, Artifact Registry generally, storage hosts, other registries, and private registries remains Direct.
@@ -1387,7 +1440,7 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.
 - Helper identifier changes require explicit old-registration cleanup.
-- Reproduction requires manual application of documented diffs because no patch file/upstream tree is vendored.
+- Reproduction requires manual application of the README-inline Patch 1 and Patch 2 diffs. Patch 3 is vendored as the ready-to-apply `patches/sing-box-1.13.19-patch3-traffic-accounting.patch`; the upstream sing-box source tree is not vendored.
 
 ## Repository privacy
 
@@ -1438,6 +1491,10 @@ Selected Docker Hub first-party HTTPS traffic uses Outline within its documented
 Selected Docker Desktop-backed Kubernetes official-registry HTTPS traffic uses Outline within its documented shared-process and exact-hostname boundaries.
 Selected exact `gcr.io` Docker backend traffic uses Outline within the Container Registries shared-process boundary.
 Selected Homebrew Core bottle/update traffic uses Outline within its documented system-curl and scoped Git-helper boundaries.
+While the current Helper owns an exit-unconfirmed launched sing-box Process, every later Start fails closed and cannot launch a second sing-box.
+Runtime config, PID, active digest, and in-memory ownership are released only after the corresponding process exit has been confirmed under the current cleanup rules.
 ```
+
+The unresolved in-memory ownership invariant is limited to the current Helper lifetime and does not claim cross-helper crash recovery or orphan adoption.
 
 Unmatched includes Visual Studio Code itself, Homebrew Cask vendor and source-build destinations, Homebrew Git destinations other than the scoped self-update `github.com` route, SSH Git, Git LFS, GitHub CLI, local Git commands, integrated-terminal commands, `codex-code-mode-host`, unrelated extension processes, `Code Helper (Plugin)` traffic except for the documented exact `chatgpt.com` TLS TCP/443 route, arbitrary Docker backend/CLI hostnames, third-party registries, and ordinary container egress. The whole Code Helper, Docker backend, Docker CLI, system curl, and Apple Git helper are not proxied by the Homebrew target.
