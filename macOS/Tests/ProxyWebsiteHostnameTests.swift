@@ -219,14 +219,14 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
         }
     }
 
-    func testEffectiveListAcceptsOneHundredElevenAndRejectsOneHundredTwelve() throws {
-        let accepted = (0..<111).map { "host\($0).example" }
+    func testEffectiveListAcceptsOneHundredFourteenAndRejectsOneHundredFifteen() throws {
+        let accepted = (0..<114).map { "host\($0).example" }
         XCTAssertEqual(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(accepted),
             accepted.sorted()
         )
 
-        let rejected = (0..<112).map { "host\($0).example" }
+        let rejected = (0..<115).map { "host\($0).example" }
         XCTAssertThrowsError(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(rejected)
         ) { error in
@@ -268,5 +268,189 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
             customHostnames: ["example.com"],
             isEnabled: true
         ))
+    }
+
+    func testChatGPTWebsiteRoutingContainsExactlyThreeExactHostnames() throws {
+        XCTAssertEqual(ChatGPTWebsiteRouting.hostnames, [
+            "chatgpt.com",
+            "ws.chatgpt.com",
+            "cdn.platform.openai.com",
+        ])
+        XCTAssertEqual(
+            try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(
+                ChatGPTWebsiteRouting.hostnames
+            ),
+            ChatGPTWebsiteRouting.hostnames.sorted()
+        )
+    }
+
+    func testChromeWebsiteRoutingCoversAllBuiltInSwitchCombinations() throws {
+        let customHostnames = ["custom.example"]
+        XCTAssertEqual(
+            try ChromeWebsiteRouting.effectiveHostnames(
+                customHostnames: customHostnames,
+                googleIsEnabled: false,
+                chatGPTIsEnabled: false
+            ),
+            customHostnames
+        )
+        XCTAssertEqual(
+            try ChromeWebsiteRouting.effectiveHostnames(
+                customHostnames: customHostnames,
+                googleIsEnabled: true,
+                chatGPTIsEnabled: false
+            ),
+            Array(Set(customHostnames + GoogleWebsiteRouting.hostnames)).sorted()
+        )
+        XCTAssertEqual(
+            try ChromeWebsiteRouting.effectiveHostnames(
+                customHostnames: customHostnames,
+                googleIsEnabled: false,
+                chatGPTIsEnabled: true
+            ),
+            Array(Set(customHostnames + ChatGPTWebsiteRouting.hostnames)).sorted()
+        )
+        XCTAssertEqual(
+            try ChromeWebsiteRouting.effectiveHostnames(
+                customHostnames: customHostnames,
+                googleIsEnabled: true,
+                chatGPTIsEnabled: true
+            ),
+            Array(Set(
+                customHostnames
+                    + GoogleWebsiteRouting.hostnames
+                    + ChatGPTWebsiteRouting.hostnames
+            )).sorted()
+        )
+    }
+
+    func testChatGPTDisabledStillAllowsSameHostnameFromCustomWebsites() throws {
+        XCTAssertEqual(
+            try ChromeWebsiteRouting.effectiveHostnames(
+                customHostnames: ["chatgpt.com"],
+                googleIsEnabled: false,
+                chatGPTIsEnabled: false
+            ),
+            ["chatgpt.com"]
+        )
+    }
+
+    func testBuiltInHostnamesDoNotConsumeCustomQuotaAndEffectiveLimitIsDerived() throws {
+        let customHostnames = (0..<100).map { "custom\($0).example" }
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
+            customHostnames: customHostnames,
+            googleIsEnabled: true,
+            chatGPTIsEnabled: true
+        )
+
+        XCTAssertEqual(ProxyWebsiteHostnameNormalizer.maximumCustomHostnameCount, 100)
+        XCTAssertEqual(
+            ProxyWebsiteHostnameNormalizer.maximumEffectiveHostnameCount,
+            ProxyWebsiteHostnameNormalizer.maximumCustomHostnameCount
+                + GoogleWebsiteRouting.hostnames.count
+                + ChatGPTWebsiteRouting.hostnames.count
+        )
+        XCTAssertEqual(effective.count, 114)
+    }
+
+    func testChatGPTSwitchRequiresHostnameVisibilityOnlyWhenChromeIsSelected() {
+        XCTAssertTrue(ChromeWebsiteRouting.requiresHostnameVisibility(
+            chromeIsSelected: true,
+            customHostnames: [],
+            googleIsEnabled: false,
+            chatGPTIsEnabled: true
+        ))
+        XCTAssertFalse(ChromeWebsiteRouting.requiresHostnameVisibility(
+            chromeIsSelected: false,
+            customHostnames: [],
+            googleIsEnabled: false,
+            chatGPTIsEnabled: true
+        ))
+    }
+
+    func testChatGPTMigrationEnablesBuiltInRoutingAndPreservesOtherCustomWebsites() {
+        let migration = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: [
+                "cdn.platform.openai.com",
+                "chatgpt.com",
+                "github.com",
+                "sto9.com",
+                "ws.chatgpt.com",
+                "www.acgxmh.com",
+                "www.wmanhua.com",
+            ],
+            isEnabled: false,
+            migrationCompleted: false
+        )
+
+        XCTAssertTrue(migration.isEnabled)
+        XCTAssertEqual(migration.customHostnames, [
+            "github.com",
+            "sto9.com",
+            "www.acgxmh.com",
+            "www.wmanhua.com",
+        ])
+    }
+
+    func testChatGPTMigrationRecoversAfterHostCleanupBeforeMarkerWrite() {
+        let migration = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: ["github.com"],
+            isEnabled: true,
+            migrationCompleted: false
+        )
+
+        XCTAssertTrue(migration.isEnabled)
+        XCTAssertEqual(migration.customHostnames, ["github.com"])
+    }
+
+    func testChatGPTMigrationIsIdempotentAfterCompletion() {
+        let first = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: ["chatgpt.com", "github.com"],
+            isEnabled: false,
+            migrationCompleted: false
+        )
+        let second = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: first.customHostnames,
+            isEnabled: first.isEnabled,
+            migrationCompleted: true
+        )
+
+        XCTAssertEqual(second, first)
+    }
+
+    func testChatGPTMigrationDoesNotEnableUsersWithoutLegacyChatGPTConfiguration() {
+        let migration = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: ["github.com"],
+            isEnabled: false,
+            migrationCompleted: false
+        )
+
+        XCTAssertFalse(migration.isEnabled)
+        XCTAssertEqual(migration.customHostnames, ["github.com"])
+    }
+
+    func testChatGPTMigrationRequiresExactLegacyTriggerHostname() {
+        let migration = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: ["cdn.platform.openai.com", "ws.chatgpt.com"],
+            isEnabled: false,
+            migrationCompleted: false
+        )
+
+        XCTAssertFalse(migration.isEnabled)
+        XCTAssertEqual(
+            migration.customHostnames,
+            ["cdn.platform.openai.com", "ws.chatgpt.com"]
+        )
+    }
+
+    func testCompletedChatGPTMigrationDoesNotOverrideLaterManualChoices() {
+        let migration = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: ["chatgpt.com", "github.com"],
+            isEnabled: false,
+            migrationCompleted: true
+        )
+
+        XCTAssertFalse(migration.isEnabled)
+        XCTAssertEqual(migration.customHostnames, ["chatgpt.com", "github.com"])
     }
 }

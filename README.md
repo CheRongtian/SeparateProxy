@@ -1,6 +1,6 @@
 # SeparateProxy
 
-SeparateProxy routes built-in Google workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, narrowly scoped Docker Hub, Kubernetes official-registry, and Google Container Registry HTTPS traffic, and Homebrew Core bottle/update traffic through an existing Outline proxy on macOS. Unmatched IPv4 traffic remains direct. Unmatched IPv6 traffic is fast-rejected so dual-stack applications can retry over IPv4. When Chrome is selected, its existing browser-wide IPv6 compatibility reject still runs before website routing.
+SeparateProxy routes built-in Google and ChatGPT workflows and user-selected Chrome websites, OpenAI Codex traffic, Apple/Xcode Git HTTPS remote transport, narrowly scoped Docker Hub, Kubernetes official-registry, and Google Container Registry HTTPS traffic, and Homebrew Core bottle/update traffic through an existing Outline proxy on macOS. Unmatched IPv4 traffic remains direct. Unmatched IPv6 traffic is fast-rejected so dual-stack applications can retry over IPv4. When Chrome is selected, its existing browser-wide IPv6 compatibility reject still runs before website routing.
 
 ```text
 Configured Chrome websites        -> IPv4 fallback -> hostname recovery -> Outline remote resolution
@@ -21,7 +21,7 @@ Unmatched IPv4 traffic            -> direct
 
 The policy is intentionally narrow. SeparateProxy supports one static Outline `ss://` access key and seven independently selectable targets:
 
-- Google Chrome Website Routing with an independent built-in Google option and a user-maintained exact-hostname list;
+- Google Chrome Website Routing with independent built-in Google and ChatGPT options plus a user-maintained exact-hostname list;
 - the Codex integration, consisting of the native `codex` executable and a narrow Work locally usage-metadata route;
 - active Apple/Xcode Git HTTPS remote transport over TCP/443;
 - Docker Hub first-party registry, authentication, and control HTTPS on exact hostnames;
@@ -38,6 +38,7 @@ The macOS app provides:
 - a SwiftUI interface;
 - Google Chrome discovery through Launch Services;
 - an independent Google Website Routing option for 11 curated exact hostnames;
+- an independent ChatGPT Website Routing option for 3 fixed exact hostnames;
 - up to 100 user-configured exact Proxy Website hostnames;
 - active OpenAI Codex VS Code extension discovery through VS Code metadata;
 - active Apple/Xcode Git discovery through the system developer-directory selection;
@@ -140,12 +141,13 @@ Chrome helper processes remain under the app bundle, so one bundle-path regex co
 
 ### Chrome Website Routing
 
-Selecting Chrome enables Website Routing. It no longer sends all Chrome traffic through Outline. Website Routing has two independent product-state sources:
+Selecting Chrome enables Website Routing. It no longer sends all Chrome traffic through Outline. Website Routing has three independent product-state sources:
 
 - **Google**, a built-in clickable option;
+- **ChatGPT**, a built-in clickable option;
 - **Custom Websites**, a user-maintained exact-hostname list.
 
-The Google selection is persisted independently and never writes its built-in hostnames into the Custom Websites list. Before Start, the app merges enabled Google hosts with Custom Websites, deduplicates them, and applies deterministic sorting. The existing XPC hostname-array field carries only that effective list, so the privileged helper and configuration builder do not contain a Google-specific routing capability.
+The Google and ChatGPT selections are persisted independently and never write their built-in hostnames into the Custom Websites list. Before Start, the app merges enabled built-in hosts with Custom Websites, deduplicates them, and applies deterministic sorting. The existing XPC hostname-array field carries only that effective list, so the privileged helper and configuration builder contain no product-specific Google or ChatGPT routing branch.
 
 The built-in Google option targets these 11 exact hostnames:
 
@@ -165,6 +167,16 @@ www.googleapis.com
 
 The first nine have core or entry-workflow evidence for Google Search, Drive, Account/OAuth, and Gemini. `jnn-pa.googleapis.com` and `www.googleapis.com` are narrowly scoped proactive compatibility candidates supported by static/official evidence. The complete 11-host set has been implemented and validated offline; manual SeparateProxy runtime validation is pending. It does not represent all Google traffic and excludes YouTube, Meet media, general Google Cloud traffic, Firebase, App Engine, ads, analytics, Chrome update, and Safe Browsing.
 
+The built-in ChatGPT option targets these 3 exact hostnames:
+
+```text
+chatgpt.com
+ws.chatgpt.com
+cdn.platform.openai.com
+```
+
+This set follows a Chrome Network observation in which `https://cdn.platform.openai.com/deployments/dil/v14/runner.html` returned HTTP 403 through a SIN Cloudflare node. Adding the exact `cdn.platform.openai.com` hostname to Custom Websites and restarting SeparateProxy changed the observed request to HTTP 200 through an ATL node, after which the GPT-6 final answer loaded. This records the observed recovery and does not establish a deeper sing-box, Cloudflare, or ChatGPT root cause.
+
 Custom Website users can paste a hostname or a complete HTTPS URL, and the app stores only its normalized exact hostname:
 
 ```text
@@ -175,9 +187,9 @@ https://www.youtube.com/watch?v=abc123
 
 Input is trimmed, parsed with Foundation, converted to lowercase ASCII/Punycode, deduplicated, and sorted. Only HTTPS with no credentials and no explicit port other than 443 is accepted. IP literals, wildcards, suffix rules, paths as routing criteria, and malformed DNS labels are rejected.
 
-An entry for `chatgpt.com` matches only `chatgpt.com`. It does not imply `ab.chatgpt.com`, `api.chatgpt.com`, or `evilchatgpt.com`. Each required subdomain must be added separately.
+A Custom Websites entry for `chatgpt.com` matches only `chatgpt.com`. It does not imply `ab.chatgpt.com`, `api.chatgpt.com`, or `evilchatgpt.com`. The ChatGPT built-in option contributes only its three listed exact hostnames; it does not add wildcard OpenAI or CDN domains.
 
-With `chatgpt.com` configured, the generated Chrome rules are equivalent to this order. The port-443 route applies to both TCP and UDP because it intentionally omits a `network` restriction:
+For one effective hostname such as `chatgpt.com`, the generated Chrome rules are equivalent to this order. The port-443 route applies to both TCP and UDP because it intentionally omits a `network` restriction:
 
 ```json
 {
@@ -198,9 +210,11 @@ With `chatgpt.com` configured, the generated Chrome rules are equivalent to this
 
 The first rule is a browser-wide compatibility rule. It rejects Chrome IPv6 before hostname sniffing so Chrome can retry over IPv4. This behavior is independent of the later Website Proxy/Direct decision. Sniff actions inspect TLS SNI, QUIC ClientHello, or HTTP Host metadata and do not override the destination. Each exact hostname has its own route rules because `override_address` is a static string. A matching rule restores the destination to that hostname while retaining the original port, so Shadowsocks carries a DOMAIN destination and the Outline server resolves it. After IPv4 fallback, configured exact hostnames use Outline and ordinary Chrome websites reach `final: direct`.
 
-With Google disabled and an empty Custom Websites list, only the browser-wide Chrome IPv6 compatibility rule is generated. No Chrome TLS, QUIC, HTTP, or website-route rules are generated. Chrome IPv4 traffic therefore reaches `final: direct`, and Website Routing does not require ECH to be disabled. Google enabled or a non-empty Custom Websites list activates the same existing sniff and exact-host route shape and requires the existing ECH visibility condition. Secure DNS is not a Website Routing prerequisite.
+With Google and ChatGPT disabled and an empty Custom Websites list, only the browser-wide Chrome IPv6 compatibility rule is generated. No Chrome TLS, QUIC, HTTP, or website-route rules are generated. Chrome IPv4 traffic therefore reaches `final: direct`, and Website Routing does not require ECH to be disabled. Either built-in option or a non-empty Custom Websites list activates the same existing sniff and exact-host route shape and requires the existing ECH visibility condition. Secure DNS is not a Website Routing prerequisite.
 
-Custom Websites retains its 100-host product limit. The 11 built-in Google hostnames do not consume that quota. After merging and deduplication, the helper and Core accept at most 111 validated effective exact hostnames. A Custom entry that duplicates a built-in Google hostname produces one route pair while remaining stored as Custom data, so it continues to work after Google is disabled.
+Custom Websites retains its 100-host product limit. The 11 Google and 3 ChatGPT built-in hostnames do not consume that quota. The effective-list limit is derived from those collections and is currently 114. A Custom entry that duplicates either built-in collection produces one route pair while remaining stored as Custom data, so it continues to work after that built-in option is disabled.
+
+The first app launch after this update performs a one-time ChatGPT migration. If the old Custom Websites list contains exact `chatgpt.com`, the app enables the built-in ChatGPT option and removes `chatgpt.com`, `cdn.platform.openai.com`, and `ws.chatgpt.com` when present; every other Custom entry remains unchanged. The app persists the enabled state before the cleaned list and writes the completion marker last. Restarting after an interrupted migration therefore preserves an already enabled ChatGPT selection. Once marked complete, later manual Custom Websites changes never retrigger the migration or override a manually disabled ChatGPT option. Users without legacy `chatgpt.com` remain disabled by default.
 
 List changes are saved immediately and apply on the next Start. The helper validates the newly generated configuration and compares its exact-byte SHA-256 identity with the identity persisted for a verified running sing-box process. An unchanged identity safely reuses the existing PID; a changed or unknown identity triggers a controlled restart so the running process loads the new config. Existing HTTP/2, HTTP/3, TLS, or QUIC connections can retain their previous route until they reconnect. Restarting Chrome gives the cleanest deterministic application of a changed list.
 
@@ -264,7 +278,7 @@ With Chrome and Codex selected and at least one effective Website Routing hostna
 2. Chrome TLS/443 -> inspect SNI
 3. Chrome QUIC/443 -> inspect hostname
 4. Chrome HTTP/80 -> inspect Host
-5. exact built-in Google or Custom Website -> restore hostname destination -> Outline
+5. exact built-in Google, built-in ChatGPT, or Custom Website -> restore hostname destination -> Outline
 6. exact Codex executable + TCP/443 -> TLS SNI destination recovery
 7. exact Codex executable -> Outline
 8. exact VS Code Plugin Helper + TCP/443 -> inspect TLS SNI only
@@ -273,7 +287,7 @@ With Chrome and Codex selected and at least one effective Website Routing hostna
 11. final -> direct for unmatched IPv4
 ```
 
-With Google disabled and an empty Custom Websites list, Chrome contributes only its IPv6 compatibility reject before the Codex rules; it contributes no TLS, QUIC, HTTP, or per-host website rules. Codex rules are appended field-for-field after the Chrome rules. Chrome Website Routing hostnames are never applied to Codex.
+With Google and ChatGPT disabled and an empty Custom Websites list, Chrome contributes only its IPv6 compatibility reject before the Codex rules; it contributes no TLS, QUIC, HTTP, or per-host website rules. Codex rules are appended field-for-field after the Chrome rules. Chrome Website Routing hostnames are never applied to Codex, and the Chrome ChatGPT option does not alter the VS Code Codex selection or discovery path.
 
 When Git is also selected, its two rules are appended after all existing Chrome and Codex rules: exact helper TCP/443 TLS sniffing with destination recovery, followed by exact helper TCP/443 routing to Outline. Docker Hub rules, when selected, follow Git without changing any earlier rule. Existing Chrome, Codex, and Git fields and ordering remain unchanged. The final IPv6 guard follows every target rule; unmatched IPv4 still reaches `final: direct`.
 
@@ -658,7 +672,7 @@ If Chrome, the user, or another tool changed any target value, SeparateProxy lea
 
 ## Chrome ECH Integration
 
-Chrome Website Routing classifies new connections by observable TLS, QUIC, or HTTP hostname. Encrypted ClientHello can hide TLS and QUIC server names, so a selected Chrome target with Google enabled or a non-empty Custom Websites list must satisfy one of these conditions before Start:
+Chrome Website Routing classifies new connections by observable TLS, QUIC, or HTTP hostname. Encrypted ClientHello can hide TLS and QUIC server names, so a selected Chrome target with Google enabled, ChatGPT enabled, or a non-empty Custom Websites list must satisfy one of these conditions before Start:
 
 - Chrome Local State contains `ssl.ech_enabled = false`;
 - the managed `EncryptedClientHelloEnabled` policy is explicitly `false`.
@@ -832,14 +846,14 @@ open macOS/SeparateProxy.xcodeproj
 4. copy it to `/Applications` and launch that copy;
 5. save the Outline key;
 6. select one or more targets: Chrome, Codex, Git, Docker Hub, Kubernetes, Container Registries, and Homebrew;
-7. if Chrome is selected and built-in Google routing is wanted, expand **Website Routing** and enable **Google**;
+7. if Chrome is selected, expand **Website Routing** and enable the wanted built-in **Google** and/or **ChatGPT** options;
 8. add optional exact hostnames under **Custom Websites**;
 9. confirm the one-time browser-wide ECH change when Website Routing first requires it;
 10. select **Enable Helper** when shown;
 11. if **Approval Required** appears, use **Open System Settings** and enable SeparateProxy under **Login Items & Extensions > App Background Activity**;
 12. refresh until idle state is `Stopped`, then use **Start Proxy**.
 
-If a legacy SeparateProxy DNS integration record exists, the first non-empty, hostname-visible Website Routing Start restores the original DNS preferences before starting. This path runs when Google is enabled or Custom Websites is non-empty. Chrome may be closed and reopened so Local State can be updated safely. External DNS changes are preserved. A real migration error is shown and Start remains blocked.
+If a legacy SeparateProxy DNS integration record exists, the first non-empty, hostname-visible Website Routing Start restores the original DNS preferences before starting. This path runs when Google, ChatGPT, or Custom Websites contributes an effective hostname. Chrome may be closed and reopened so Local State can be updated safely. External DNS changes are preserved. A real migration error is shown and Start remains blocked.
 
 When replacing a build containing an updated helper or sing-box:
 
@@ -853,6 +867,8 @@ When replacing a build containing an updated helper or sing-box:
 8. start the proxy again.
 
 The current app has no **Replace Helper** or **Disable Helper** action, no unregister flow, and no automatic helper-binary version replacement workflow. First installation continues to use steps 10–12 above; the System Settings disable-and-replace sequence applies to updates that contain a changed helper or bundled sing-box.
+
+This update raises the shared effective Website Routing limit from 111 to 114. An older installed helper still contains the 111-host validator and can reject a new app request that uses the full combined capacity. Follow the disable-and-replace sequence above so the app and helper use the same Core validation logic before relying on more than 111 effective hostnames.
 
 ## Tests
 
@@ -869,7 +885,7 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google set and effective 111-host limit, deterministic Google/Custom merge and deduplication, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, separate Docker backend and bundled-CLI discovery capabilities, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart, post-launch metadata persistence failure, helper-owned unresolved in-memory process handling, exit confirmation against the exact `Process` lifetime, identity mismatch not being accepted as confirmed exit, prevention of a second launch while exit remains unconfirmed, cleanup only after confirmed exit, secure runtime-file negative cases and digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google and ChatGPT sets, the derived effective 114-host limit, all built-in switch combinations, merge and deduplication, one-time ChatGPT migration and interruption recovery, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, separate Docker backend and bundled-CLI discovery capabilities, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart, post-launch metadata persistence failure, helper-owned unresolved in-memory process handling, exit confirmation against the exact `Process` lifetime, identity mismatch not being accepted as confirmed exit, prevention of a second launch while exit remains unconfirmed, cleanup only after confirmed exit, secure runtime-file negative cases and digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
@@ -1202,7 +1218,7 @@ The app refreshes at launch, after operations, and on manual refresh; it does no
 
 ### Proxy Website still goes Direct
 
-1. confirm built-in **Google** is enabled or the normalized exact hostname appears under **Custom Websites**;
+1. confirm the relevant built-in **Google** or **ChatGPT** option is enabled, or the normalized exact hostname appears under **Custom Websites**;
 2. confirm SeparateProxy was stopped and started after the last list change;
 3. confirm that Start actually launched a new sing-box process; a correct on-disk config alone does not prove the running process loaded it;
 4. restart Chrome if an old HTTP/2, HTTP/3, TLS, or QUIC connection may still be reused;
@@ -1413,7 +1429,7 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - When Chrome is selected, SeparateProxy intentionally rejects native Chrome IPv6 before hostname routing to trigger IPv4 fallback. An otherwise Direct Chrome site therefore does not use its native IPv6 path while this compatibility behavior is active. This rule reflects the tested Chrome/macOS/network environment and is not copied to Codex or other processes.
 - Ordinary Chrome sites use Chrome's current DNS behavior and retain their original destination for Direct egress.
 - Configured sites use Outline-side resolution only after an observable exact hostname matches and `override_address` restores the hostname destination.
-- Custom Websites may require multiple exact hostname entries; no suffix, wildcard, or dependency expansion is generated. Google is the single built-in curated exact-host option and does not imply all Google services.
+- Custom Websites may require multiple exact hostname entries; no suffix, wildcard, or dependency expansion is generated. Google and ChatGPT are independent curated exact-host options and imply only their documented hostnames.
 - Paths, queries, and fragments are discarded during input normalization and never participate in routing.
 - ECH is disabled browser-wide while Website Routing needs hostname visibility. HTTPS content remains encrypted, while network observers can see more hostname information.
 - Google Website Routing has offline config validation only; manual Search, Drive, Account/OAuth, and Gemini runtime validation is pending.

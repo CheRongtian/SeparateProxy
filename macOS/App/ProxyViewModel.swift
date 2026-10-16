@@ -21,6 +21,17 @@ final class ProxyViewModel: ObservableObject {
             }
         }
     }
+    @Published var chatGPTWebsiteRoutingIsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                chatGPTWebsiteRoutingIsEnabled,
+                forKey: Self.chatGPTWebsiteRoutingSelectionKey
+            )
+            if state == .running {
+                message = "ChatGPT Website Routing changes will apply the next time the proxy starts."
+            }
+        }
+    }
     @Published var codexIsSelected: Bool {
         didSet {
             UserDefaults.standard.set(codexIsSelected, forKey: Self.codexSelectionKey)
@@ -96,6 +107,8 @@ final class ProxyViewModel: ObservableObject {
 
     private static let chromeSelectionKey = "chrome-is-selected"
     private static let googleWebsiteRoutingSelectionKey = "google-website-routing-is-enabled"
+    private static let chatGPTWebsiteRoutingSelectionKey = "chatgpt-website-routing-is-enabled"
+    private static let chatGPTWebsiteRoutingMigrationKey = "chatgpt-website-routing-migration-v1-completed"
     private static let codexSelectionKey = "codex-is-selected"
     private static let gitSelectionKey = "git-is-selected"
     private static let dockerHubSelectionKey = "docker-is-selected"
@@ -117,6 +130,22 @@ final class ProxyViewModel: ObservableObject {
     private var trafficPresentationIsVisible = false
 
     init() {
+        let defaults = UserDefaults.standard
+        let storedHostnames = defaults.stringArray(
+            forKey: Self.proxyWebsiteHostnamesKey
+        ) ?? []
+        let validatedStoredHostnames = (
+            try? ProxyWebsiteHostnameNormalizer.validateCustomNormalizedList(storedHostnames)
+        ) ?? []
+        let chatGPTMigrationWasCompleted = defaults.bool(
+            forKey: Self.chatGPTWebsiteRoutingMigrationKey
+        )
+        let chatGPTMigration = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: validatedStoredHostnames,
+            isEnabled: defaults.bool(forKey: Self.chatGPTWebsiteRoutingSelectionKey),
+            migrationCompleted: chatGPTMigrationWasCompleted
+        )
+
         if UserDefaults.standard.object(forKey: Self.chromeSelectionKey) == nil {
             chromeIsSelected = true
         } else {
@@ -125,6 +154,7 @@ final class ProxyViewModel: ObservableObject {
         googleWebsiteRoutingIsEnabled = UserDefaults.standard.bool(
             forKey: Self.googleWebsiteRoutingSelectionKey
         )
+        chatGPTWebsiteRoutingIsEnabled = chatGPTMigration.isEnabled
         codexIsSelected = UserDefaults.standard.bool(forKey: Self.codexSelectionKey)
         gitIsSelected = UserDefaults.standard.bool(forKey: Self.gitSelectionKey)
         dockerHubIsSelected = UserDefaults.standard.bool(forKey: Self.dockerHubSelectionKey)
@@ -133,12 +163,22 @@ final class ProxyViewModel: ObservableObject {
             forKey: Self.containerRegistriesSelectionKey
         )
         homebrewIsSelected = UserDefaults.standard.bool(forKey: Self.homebrewSelectionKey)
-        let storedHostnames = UserDefaults.standard.stringArray(
-            forKey: Self.proxyWebsiteHostnamesKey
-        ) ?? []
-        proxyWebsiteHostnames = (
-            try? ProxyWebsiteHostnameNormalizer.validateCustomNormalizedList(storedHostnames)
-        ) ?? []
+        proxyWebsiteHostnames = chatGPTMigration.customHostnames
+        if !chatGPTMigrationWasCompleted {
+            // Persist the built-in route before removing its legacy Custom
+            // fallbacks, then mark completion only after both values are safe.
+            defaults.set(
+                chatGPTMigration.isEnabled,
+                forKey: Self.chatGPTWebsiteRoutingSelectionKey
+            )
+            if chatGPTMigration.customHostnames != validatedStoredHostnames {
+                defaults.set(
+                    chatGPTMigration.customHostnames,
+                    forKey: Self.proxyWebsiteHostnamesKey
+                )
+            }
+            defaults.set(true, forKey: Self.chatGPTWebsiteRoutingMigrationKey)
+        }
         refreshLocalState()
     }
 
@@ -481,10 +521,11 @@ final class ProxyViewModel: ObservableObject {
             return
         }
 
-        if GoogleWebsiteRouting.requiresHostnameVisibility(
+        if ChromeWebsiteRouting.requiresHostnameVisibility(
             chromeIsSelected: chromeIsSelected,
             customHostnames: proxyWebsiteHostnames,
-            isEnabled: googleWebsiteRoutingIsEnabled
+            googleIsEnabled: googleWebsiteRoutingIsEnabled,
+            chatGPTIsEnabled: chatGPTWebsiteRoutingIsEnabled
         ) {
             do {
                 guard try chromeECHManager.isRequirementSatisfied() else {
@@ -510,9 +551,10 @@ final class ProxyViewModel: ObservableObject {
         var accessKey: String?
         do {
             let effectiveProxyWebsiteHostnames = chromeIsSelected
-                ? try GoogleWebsiteRouting.effectiveHostnames(
+                ? try ChromeWebsiteRouting.effectiveHostnames(
                     customHostnames: proxyWebsiteHostnames,
-                    isEnabled: googleWebsiteRoutingIsEnabled
+                    googleIsEnabled: googleWebsiteRoutingIsEnabled,
+                    chatGPTIsEnabled: chatGPTWebsiteRoutingIsEnabled
                 )
                 : []
             accessKey = try keychain.load()

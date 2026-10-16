@@ -541,6 +541,141 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.route.rules.first?.action, "reject")
     }
 
+    func testConfigurationBuilderDoesNotImplicitlyExpandChatGPTHostname() throws {
+        let customHostnames = try ProxyWebsiteHostnameNormalizer.adding(
+            "https://chatgpt.com",
+            to: []
+        )
+        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+            customHostnames: customHostnames,
+            isEnabled: false
+        )
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: effective
+        )
+        let routeRules = configuration.route.rules.filter { $0.action == "route" }
+
+        XCTAssertEqual(customHostnames, ["chatgpt.com"])
+        XCTAssertEqual(effective, ["chatgpt.com"])
+        XCTAssertEqual(routeRules.flatMap { $0.domains ?? [] }, [
+            "chatgpt.com", "chatgpt.com",
+        ])
+        XCTAssertEqual(configuration.route.final, "direct")
+    }
+
+    func testAllBuiltInWebsiteRulesFitTheUnifiedEffectiveInputLimit() throws {
+        let customHostnames = try ProxyWebsiteHostnameNormalizer.validateCustomNormalizedList(
+            (0..<100).map { "host\($0).example" }
+        )
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
+            customHostnames: customHostnames,
+            googleIsEnabled: true,
+            chatGPTIsEnabled: true
+        )
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: effective
+        )
+        let runtimeHostnames = Set(configuration.route.rules.flatMap { $0.domains ?? [] })
+
+        XCTAssertEqual(customHostnames.count, 100)
+        XCTAssertEqual(effective.count, 114)
+        XCTAssertEqual(runtimeHostnames, Set(effective))
+        XCTAssertEqual(runtimeHostnames.count, 114)
+    }
+
+    func testChatGPTRulesDisappearWhenTheirOnlyCustomHostnameIsRemoved() throws {
+        var customHostnames = ["chatgpt.com"]
+        let selected = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: customHostnames
+        )
+        customHostnames.removeAll { $0 == "chatgpt.com" }
+        let removed = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: customHostnames
+        )
+
+        XCTAssertEqual(
+            Set(selected.route.rules.flatMap { $0.domains ?? [] }),
+            Set(["chatgpt.com"])
+        )
+        XCTAssertEqual(customHostnames, [])
+        XCTAssertTrue(removed.route.rules.flatMap { $0.domains ?? [] }.isEmpty)
+        XCTAssertEqual(removed.route.rules.count, 2)
+        XCTAssertEqual(removed.route.final, "direct")
+    }
+
+    func testConfigurationBuilderKeepsChatGPTRelatedHostnamesExact() throws {
+        for hostname in [
+            "example.com", "foo.chatgpt.com", "api.chatgpt.com", "evilchatgpt.com",
+        ] {
+            let configuration = try SingBoxConfigurationBuilder.make(
+                outline: outline,
+                chromeBundlePath: "/Applications/Google Chrome.app",
+                proxyWebsiteHostnames: [hostname]
+            )
+            let routeRules = configuration.route.rules.filter { $0.action == "route" }
+
+            XCTAssertEqual(routeRules.flatMap { $0.domains ?? [] }, [hostname, hostname], hostname)
+            XCTAssertEqual(routeRules.compactMap(\.overrideAddress), [hostname, hostname], hostname)
+            XCTAssertEqual(configuration.route.final, "direct", hostname)
+        }
+    }
+
+    func testConfigurationBuilderDeduplicatesExplicitChatGPTHostnames() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: ["ws.chatgpt.com", "chatgpt.com", "ws.chatgpt.com"]
+        )
+        let routeRules = configuration.route.rules.filter { $0.action == "route" }
+
+        XCTAssertEqual(routeRules.flatMap { $0.domains ?? [] }, [
+            "chatgpt.com", "chatgpt.com", "ws.chatgpt.com", "ws.chatgpt.com",
+        ])
+    }
+
+    func testChatGPTAndGoogleBuiltInsPreserveCustomMergeAndRuntimeSorting() throws {
+        let customHostnames = [
+            "z.example.com", "chatgpt.com", "accounts.google.com", "a.example.com",
+        ]
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
+            customHostnames: customHostnames,
+            googleIsEnabled: true,
+            chatGPTIsEnabled: true
+        )
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            proxyWebsiteHostnames: effective
+        )
+        let expectedEffective = Array(Set(
+            customHostnames
+                + GoogleWebsiteRouting.hostnames
+                + ChatGPTWebsiteRouting.hostnames
+        )).sorted()
+        let routeRules = configuration.route.rules.filter { $0.action == "route" }
+
+        XCTAssertEqual(effective, expectedEffective)
+        XCTAssertEqual(effective.filter { $0 == "accounts.google.com" }.count, 1)
+        XCTAssertTrue(effective.contains("ws.chatgpt.com"))
+        XCTAssertTrue(effective.contains("cdn.platform.openai.com"))
+        XCTAssertEqual(
+            routeRules.flatMap { $0.domains ?? [] },
+            expectedEffective.flatMap { [$0, $0] }
+        )
+        XCTAssertEqual(
+            routeRules.map(\.destinationPort),
+            expectedEffective.flatMap { _ in [UInt16(80), UInt16(443)] }
+        )
+    }
+
     func testChromeAndCodexOnlyAppendUnchangedCodexRulesAfterWebsiteRules() throws {
         let chromeOnly = try SingBoxConfigurationBuilder.make(
             outline: outline,

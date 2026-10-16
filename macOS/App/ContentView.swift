@@ -7,6 +7,7 @@ protocol ProxyViewModeling: ObservableObject {
     var accessKeyInput: String { get set }
     var chromeIsSelected: Bool { get set }
     var googleWebsiteRoutingIsEnabled: Bool { get set }
+    var chatGPTWebsiteRoutingIsEnabled: Bool { get set }
     var codexIsSelected: Bool { get set }
     var gitIsSelected: Bool { get set }
     var dockerHubIsSelected: Bool { get set }
@@ -313,6 +314,27 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .accessibilityLabel("Google Website Routing")
+                    }
+
+                    Divider()
+
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ChatGPT")
+                                .font(.body.weight(.medium))
+                            Text("ChatGPT, WebSocket, and response runner")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Toggle(
+                            "ChatGPT Website Routing",
+                            isOn: $viewModel.chatGPTWebsiteRoutingIsEnabled
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .accessibilityLabel("ChatGPT Website Routing")
                     }
 
                     Divider()
@@ -990,6 +1012,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
     @Published var accessKeyInput = ""
     @Published var chromeIsSelected = true
     @Published var googleWebsiteRoutingIsEnabled = true
+    @Published var chatGPTWebsiteRoutingIsEnabled = true
     @Published var codexIsSelected = true
     @Published var gitIsSelected = true
     @Published var dockerHubIsSelected = true

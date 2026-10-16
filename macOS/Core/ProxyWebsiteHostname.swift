@@ -15,6 +15,41 @@ public enum ChromeInfrastructure {
     """
 }
 
+public struct ChatGPTWebsiteRoutingMigrationResult: Equatable {
+    public let customHostnames: [String]
+    public let isEnabled: Bool
+}
+
+public enum ChatGPTWebsiteRouting {
+    public static let hostnames = [
+        "chatgpt.com",
+        "ws.chatgpt.com",
+        "cdn.platform.openai.com",
+    ]
+
+    private static let legacyTriggerHostname = "chatgpt.com"
+    private static let migratedCustomHostnames = Set(hostnames)
+
+    public static func migrateLegacyConfiguration(
+        customHostnames: [String],
+        isEnabled: Bool,
+        migrationCompleted: Bool
+    ) -> ChatGPTWebsiteRoutingMigrationResult {
+        guard !migrationCompleted else {
+            return .init(customHostnames: customHostnames, isEnabled: isEnabled)
+        }
+        guard customHostnames.contains(legacyTriggerHostname) else {
+            return .init(customHostnames: customHostnames, isEnabled: isEnabled)
+        }
+        return .init(
+            customHostnames: customHostnames.filter {
+                !migratedCustomHostnames.contains($0)
+            },
+            isEnabled: true
+        )
+    }
+}
+
 public enum GoogleWebsiteRouting {
     // The first nine hosts cover core or entry workflows. The final two are
     // narrowly scoped proactive compatibility candidates; runtime validation
@@ -37,13 +72,10 @@ public enum GoogleWebsiteRouting {
         customHostnames: [String],
         isEnabled: Bool
     ) throws -> [String] {
-        let validatedCustomHostnames = try ProxyWebsiteHostnameNormalizer
-            .validateCustomNormalizedList(customHostnames)
-        guard isEnabled else {
-            return validatedCustomHostnames
-        }
-        return try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(
-            validatedCustomHostnames + hostnames
+        try ChromeWebsiteRouting.effectiveHostnames(
+            customHostnames: customHostnames,
+            googleIsEnabled: isEnabled,
+            chatGPTIsEnabled: false
         )
     }
 
@@ -52,7 +84,43 @@ public enum GoogleWebsiteRouting {
         customHostnames: [String],
         isEnabled: Bool
     ) -> Bool {
-        chromeIsSelected && (!customHostnames.isEmpty || isEnabled)
+        ChromeWebsiteRouting.requiresHostnameVisibility(
+            chromeIsSelected: chromeIsSelected,
+            customHostnames: customHostnames,
+            googleIsEnabled: isEnabled,
+            chatGPTIsEnabled: false
+        )
+    }
+}
+
+public enum ChromeWebsiteRouting {
+    public static func effectiveHostnames(
+        customHostnames: [String],
+        googleIsEnabled: Bool,
+        chatGPTIsEnabled: Bool
+    ) throws -> [String] {
+        let validatedCustomHostnames = try ProxyWebsiteHostnameNormalizer
+            .validateCustomNormalizedList(customHostnames)
+        var effectiveHostnames = validatedCustomHostnames
+        if googleIsEnabled {
+            effectiveHostnames.append(contentsOf: GoogleWebsiteRouting.hostnames)
+        }
+        if chatGPTIsEnabled {
+            effectiveHostnames.append(contentsOf: ChatGPTWebsiteRouting.hostnames)
+        }
+        return try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(
+            effectiveHostnames
+        )
+    }
+
+    public static func requiresHostnameVisibility(
+        chromeIsSelected: Bool,
+        customHostnames: [String],
+        googleIsEnabled: Bool,
+        chatGPTIsEnabled: Bool
+    ) -> Bool {
+        chromeIsSelected
+            && (!customHostnames.isEmpty || googleIsEnabled || chatGPTIsEnabled)
     }
 }
 
@@ -93,7 +161,7 @@ public enum ProxyWebsiteHostnameError: LocalizedError, Equatable {
         case .tooManyCustomHostnames:
             return "Custom Websites supports at most 100 hostnames."
         case .tooManyEffectiveHostnames:
-            return "Website Routing supports at most 111 effective hostnames."
+            return "Website Routing supports at most \(ProxyWebsiteHostnameNormalizer.maximumEffectiveHostnameCount) effective hostnames."
         case .notNormalized:
             return "The helper received a website hostname that was not normalized."
         }
@@ -102,7 +170,9 @@ public enum ProxyWebsiteHostnameError: LocalizedError, Equatable {
 
 public enum ProxyWebsiteHostnameNormalizer {
     public static let maximumCustomHostnameCount = 100
-    public static let maximumEffectiveHostnameCount = 111
+    public static let maximumEffectiveHostnameCount = maximumCustomHostnameCount
+        + GoogleWebsiteRouting.hostnames.count
+        + ChatGPTWebsiteRouting.hostnames.count
 
     public static func normalize(_ input: String) throws -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)

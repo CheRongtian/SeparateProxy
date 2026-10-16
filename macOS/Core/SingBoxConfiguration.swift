@@ -345,11 +345,11 @@ public enum SingBoxConfigurationBuilder {
         let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
             .replacingOccurrences(of: #"\/"#, with: "/")
         let chromeRegex = "^\(escapedPath)/"
-        let normalizedWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
+        let runtimeWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
             .validateEffectiveNormalizedList(proxyWebsiteHostnames)
         return makeChromeRules(
             chromeRegex: chromeRegex,
-            proxyWebsiteHostnames: normalizedWebsiteHostnames
+            proxyWebsiteHostnames: runtimeWebsiteHostnames
         )
     }
 
