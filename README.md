@@ -689,6 +689,8 @@ The **Website Routing ECH: Disabled** UI state reflects `ssl.ech_enabled = false
 
 The record contains only whether `ssl` originally existed and whether `ssl.ech_enabled` existed with its original Boolean value. It does not duplicate or alter `chrome-dns-integration.json`. Restore proceeds only while the current ECH value is still `false`; an external change is reported and left untouched. DNS and ECH can therefore be restored independently.
 
+An Error state does not confirm that sing-box has stopped. Stop Proxy remains available in Error, and ECH restoration stays blocked until a successful Stop or status refresh clears that uncertainty. Restoration checks the proxy state again after waiting for Chrome to quit.
+
 SeparateProxy reads managed policy state and never installs a policy, profile, or file under `/Library/Managed Preferences`. A managed `true` value blocks non-empty Website Routing because hostname visibility cannot be guaranteed. A managed `false` value satisfies the requirement without writing Local State.
 
 `ssl.ech_enabled` is an internal Chrome preference rather than a promised long-term public API. Unexpected future schemas fail closed and require an app update.
@@ -780,7 +782,7 @@ Runtime config contains the parsed Outline server, port, method, and password:
 
 The runtime directory persists. The log persists and is truncated when the next launch reaches log opening. PID can remain after unexpected exit until later cleanup.
 
-The helper stores `active-config.sha256` as the SHA-256 identity of the exact configuration bytes loaded when the current sing-box process was launched. A repeated Start with a verified live PID reuses that process only when the stored identity matches the newly validated configuration. A changed, missing, or malformed identity triggers a controlled termination and restart after the new configuration passes `sing-box check`. Successful Stop removes the PID, configuration, and active identity. This metadata contains no access key, password, target details, or duplicate configuration.
+The helper stores `active-config.sha256` as the SHA-256 identity of the exact configuration bytes loaded when the current sing-box process was launched. Configuration JSON uses sorted object keys so identical inputs produce stable bytes. A repeated Start with a verified live PID reuses that process only when the stored identity matches the newly validated configuration. A changed, missing, or malformed identity triggers a controlled termination and restart after the new configuration passes `sing-box check`. Successful Stop removes the PID, configuration, and active identity. This metadata contains no access key, password, target details, or duplicate configuration.
 
 If PID or active-digest persistence fails after launch, the helper terminates the process it just launched and waits for confirmed exit. A final process verification failure after metadata persistence enters the same fail-closed behavior when the exact launched process still exists or its exit cannot be confirmed. The failed Start is not reported as successful. Confirmed exit permits cleanup and returns the original launch or persistence error. If exit cannot be confirmed, the helper retains its exact in-memory `Process` reference, any durable PID metadata, and the runtime config; another Start remains blocked, and Stop can retry termination through that exact reference. Config, PID, active digest, and in-memory ownership are released only after the corresponding cleanup path has confirmed process exit.
 
@@ -1480,9 +1482,12 @@ Examples use `/Users/example/`, `<version>`, documentation IPs, and public servi
 
 `start.sh` and `stop.sh` remain a Chrome-only fallback. They use repository-relative `bin/sing-box`, generate repository-local `config.json`, run static check, and start TUN with administrator authorization.
 
+Before requesting a key or writing configuration, Start checks for an existing CLI process with the exact expected command. If it is still running, Start returns an error and asks the user to run `./stop.sh` first, preserving the configuration used by that process. The CLI also appends the app's generic IPv6 fallback guard after explicit Chrome routes: unmatched IPv6 is fast-rejected and unmatched IPv4 remains Direct.
+
 Differences from SwiftUI:
 
 - fixed `/Applications/Google Chrome.app` regex;
+- whole-Chrome Outline routing, without Website Routing hostname selection;
 - no Codex discovery/routing;
 - no Git discovery/routing;
 - no Docker Hub discovery/routing;

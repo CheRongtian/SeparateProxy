@@ -128,7 +128,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
 
     public func encodedJSON() throws -> Data {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)
     }
 }
@@ -162,53 +162,9 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
 public enum SingBoxConfigurationBuilder {
     public static func make(
         outline: OutlineAccessKey,
-        chromeBundlePath: String,
-        proxyWebsiteHostnames: [String] = []
-    ) throws -> SingBoxConfiguration {
-        let chromeRules = try makeChromeRules(
-            chromeBundlePath: chromeBundlePath,
-            proxyWebsiteHostnames: proxyWebsiteHostnames
-        )
-
-        return SingBoxConfiguration(
-            log: .init(level: "info", timestamp: true),
-            inbounds: [
-                .init(
-                    type: "tun",
-                    tag: "tun-in",
-                    address: ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
-                    autoRoute: true,
-                    stack: "system"
-                )
-            ],
-            outbounds: [
-                .init(
-                    type: "direct",
-                    tag: "direct",
-                    server: nil,
-                    serverPort: nil,
-                    method: nil,
-                    password: nil
-                ),
-                .init(
-                    type: "shadowsocks",
-                    tag: "outline",
-                    server: outline.server,
-                    serverPort: outline.serverPort,
-                    method: outline.method,
-                    password: outline.password
-                )
-            ],
-            route: makeRoute(explicitRules: chromeRules),
-            experimental: trafficAccountingConfiguration
-        )
-    }
-
-    public static func make(
-        outline: OutlineAccessKey,
         chromeBundlePath: String?,
-        codexExecutablePath: String?,
-        vsCodePluginHelperExecutablePath: String?,
+        codexExecutablePath: String? = nil,
+        vsCodePluginHelperExecutablePath: String? = nil,
         gitInstallation: AppleGitInstallation? = nil,
         dockerHubInstallation: DockerHubInstallation? = nil,
         kubernetesInstallation: DockerDesktopBackendInstallation? = nil,
@@ -236,55 +192,34 @@ public enum SingBoxConfigurationBuilder {
             throw SingBoxConfigurationError.invalidGitHelperPaths
         }
 
-        var additionalRules: [SingBoxConfiguration.Route.Rule] = []
+        var rules: [SingBoxConfiguration.Route.Rule] = []
+        if let chromeBundlePath {
+            rules += try makeChromeRules(
+                chromeBundlePath: chromeBundlePath,
+                proxyWebsiteHostnames: proxyWebsiteHostnames
+            )
+        }
         if let codexExecutablePath {
-            additionalRules += try makeCodexRules(
+            rules += try makeCodexRules(
                 executablePath: codexExecutablePath,
                 vsCodePluginHelperExecutablePath: vsCodePluginHelperExecutablePath!
             )
         }
         if let gitInstallation {
-            additionalRules += try makeGitRules(installation: gitInstallation)
+            rules += try makeGitRules(installation: gitInstallation)
         }
         if dockerHubInstallation != nil
             || kubernetesInstallation != nil
             || containerRegistriesInstallation != nil {
-            additionalRules += try makeDockerRoutingRules(
+            rules += try makeDockerRoutingRules(
                 dockerHubInstallation: dockerHubInstallation,
                 kubernetesInstallation: kubernetesInstallation,
                 containerRegistriesInstallation: containerRegistriesInstallation
             )
         }
         if homebrewEnabled {
-            additionalRules += try makeHomebrewRules(
+            rules += try makeHomebrewRules(
                 gitInstallation: gitInstallation == nil ? homebrewGitInstallation : nil
-            )
-        }
-
-        if let chromeBundlePath {
-            let chromeConfiguration = try make(
-                outline: outline,
-                chromeBundlePath: chromeBundlePath,
-                proxyWebsiteHostnames: proxyWebsiteHostnames
-            )
-            guard !additionalRules.isEmpty else {
-                return chromeConfiguration
-            }
-            var combinedRules = try makeChromeRules(
-                chromeBundlePath: chromeBundlePath,
-                proxyWebsiteHostnames: proxyWebsiteHostnames
-            )
-            combinedRules.append(contentsOf: additionalRules)
-            return SingBoxConfiguration(
-                log: chromeConfiguration.log,
-                inbounds: chromeConfiguration.inbounds,
-                outbounds: chromeConfiguration.outbounds,
-                route: makeRoute(
-                    explicitRules: combinedRules,
-                    autoDetectInterface: chromeConfiguration.route.autoDetectInterface,
-                    final: chromeConfiguration.route.final
-                ),
-                experimental: chromeConfiguration.experimental
             )
         }
 
@@ -317,7 +252,7 @@ public enum SingBoxConfigurationBuilder {
                     password: outline.password
                 )
             ],
-            route: makeRoute(explicitRules: additionalRules),
+            route: makeRoute(explicitRules: rules),
             experimental: trafficAccountingConfiguration
         )
     }
@@ -413,16 +348,14 @@ public enum SingBoxConfigurationBuilder {
     }
 
     private static func makeRoute(
-        explicitRules: [SingBoxConfiguration.Route.Rule],
-        autoDetectInterface: Bool = true,
-        final: String = "direct"
+        explicitRules: [SingBoxConfiguration.Route.Rule]
     ) -> SingBoxConfiguration.Route {
         var rules = explicitRules
         rules.append(makeDirectIPv6FallbackRule())
         return .init(
-            autoDetectInterface: autoDetectInterface,
+            autoDetectInterface: true,
             rules: rules,
-            final: final
+            final: "direct"
         )
     }
 

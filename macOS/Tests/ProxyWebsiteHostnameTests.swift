@@ -155,23 +155,26 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
 
     func testGoogleWebsiteRoutingDisabledPreservesExistingCustomBehavior() throws {
         XCTAssertEqual(
-            try GoogleWebsiteRouting.effectiveHostnames(
+            try ChromeWebsiteRouting.effectiveHostnames(
                 customHostnames: [],
-                isEnabled: false
+                googleIsEnabled: false,
+                chatGPTIsEnabled: false
             ),
             []
         )
         XCTAssertEqual(
-            try GoogleWebsiteRouting.effectiveHostnames(
+            try ChromeWebsiteRouting.effectiveHostnames(
                 customHostnames: ["z.example.com", "a.example.com"],
-                isEnabled: false
+                googleIsEnabled: false,
+                chatGPTIsEnabled: false
             ),
             ["a.example.com", "z.example.com"]
         )
         XCTAssertEqual(
-            try GoogleWebsiteRouting.effectiveHostnames(
+            try ChromeWebsiteRouting.effectiveHostnames(
                 customHostnames: [],
-                isEnabled: true
+                googleIsEnabled: true,
+                chatGPTIsEnabled: false
             ),
             GoogleWebsiteRouting.hostnames.sorted()
         )
@@ -180,9 +183,10 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
     func testGoogleWebsiteRoutingMergesDeduplicatesAndDoesNotMutateCustomData() throws {
         let customHostnames = ["z.example.com", "accounts.google.com"]
         let originalCustomHostnames = customHostnames
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: customHostnames,
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         )
 
         XCTAssertEqual(customHostnames, originalCustomHostnames)
@@ -194,9 +198,10 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
 
     func testGoogleWebsiteRoutingAcceptsOneHundredCustomPlusElevenBuiltIn() throws {
         let customHostnames = (0..<100).map { "host\($0).example" }
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: customHostnames,
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         )
 
         XCTAssertEqual(effective.count, 111)
@@ -207,9 +212,10 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
 
         let tooManyCustomHostnames = (0..<101).map { "custom\($0).example" }
         XCTAssertThrowsError(
-            try GoogleWebsiteRouting.effectiveHostnames(
+            try ChromeWebsiteRouting.effectiveHostnames(
                 customHostnames: tooManyCustomHostnames,
-                isEnabled: true
+                googleIsEnabled: true,
+                chatGPTIsEnabled: false
             )
         ) { error in
             XCTAssertEqual(
@@ -243,30 +249,35 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
     }
 
     func testHostnameVisibilityRequirementCoversGoogleAndCustomCombinations() {
-        XCTAssertFalse(GoogleWebsiteRouting.requiresHostnameVisibility(
+        XCTAssertFalse(ChromeWebsiteRouting.requiresHostnameVisibility(
             chromeIsSelected: true,
             customHostnames: [],
-            isEnabled: false
+            googleIsEnabled: false,
+            chatGPTIsEnabled: false
         ))
-        XCTAssertTrue(GoogleWebsiteRouting.requiresHostnameVisibility(
+        XCTAssertTrue(ChromeWebsiteRouting.requiresHostnameVisibility(
             chromeIsSelected: true,
             customHostnames: ["example.com"],
-            isEnabled: false
+            googleIsEnabled: false,
+            chatGPTIsEnabled: false
         ))
-        XCTAssertTrue(GoogleWebsiteRouting.requiresHostnameVisibility(
+        XCTAssertTrue(ChromeWebsiteRouting.requiresHostnameVisibility(
             chromeIsSelected: true,
             customHostnames: [],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         ))
-        XCTAssertTrue(GoogleWebsiteRouting.requiresHostnameVisibility(
+        XCTAssertTrue(ChromeWebsiteRouting.requiresHostnameVisibility(
             chromeIsSelected: true,
             customHostnames: ["example.com"],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         ))
-        XCTAssertFalse(GoogleWebsiteRouting.requiresHostnameVisibility(
+        XCTAssertFalse(ChromeWebsiteRouting.requiresHostnameVisibility(
             chromeIsSelected: false,
             customHostnames: ["example.com"],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         ))
     }
 

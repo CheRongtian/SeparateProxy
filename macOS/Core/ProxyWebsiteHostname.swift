@@ -67,30 +67,6 @@ public enum GoogleWebsiteRouting {
         "jnn-pa.googleapis.com",
         "www.googleapis.com",
     ]
-
-    public static func effectiveHostnames(
-        customHostnames: [String],
-        isEnabled: Bool
-    ) throws -> [String] {
-        try ChromeWebsiteRouting.effectiveHostnames(
-            customHostnames: customHostnames,
-            googleIsEnabled: isEnabled,
-            chatGPTIsEnabled: false
-        )
-    }
-
-    public static func requiresHostnameVisibility(
-        chromeIsSelected: Bool,
-        customHostnames: [String],
-        isEnabled: Bool
-    ) -> Bool {
-        ChromeWebsiteRouting.requiresHostnameVisibility(
-            chromeIsSelected: chromeIsSelected,
-            customHostnames: customHostnames,
-            googleIsEnabled: isEnabled,
-            chatGPTIsEnabled: false
-        )
-    }
 }
 
 public enum ChromeWebsiteRouting {

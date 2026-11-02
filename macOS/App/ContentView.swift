@@ -579,7 +579,11 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
                 Button("Restore Original ECH Setting", role: .destructive) {
                     viewModel.removeChromeECHIntegration()
                 }
-                .disabled(viewModel.state == .running || viewModel.state == .starting)
+                .disabled(
+                    viewModel.canStop
+                        || viewModel.state == .starting
+                        || viewModel.state == .stopping
+                )
             }
 
             Divider()
@@ -780,30 +784,32 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-            case .running:
-                Button {
-                    viewModel.stop()
-                } label: {
-                    Text("Stop Proxy")
-                        .frame(maxWidth: .infinity)
+            case .running, .stopped, .error:
+                if viewModel.canStop {
+                    Button {
+                        viewModel.stop()
+                    } label: {
+                        Text("Stop Proxy")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!viewModel.canStop)
+                if viewModel.state != .running {
+                    Button {
+                        viewModel.start()
+                    } label: {
+                        Text("Start Proxy")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!viewModel.canStart)
+                }
             case .starting, .stopping:
                 HStack(spacing: 8) {
                     ProgressView()
                     Text(viewModel.stateLabel)
                 }
                 .frame(maxWidth: .infinity)
-            case .stopped, .error:
-                Button {
-                    viewModel.start()
-                } label: {
-                    Text("Start Proxy")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!viewModel.canStart)
             }
         }
         .controlSize(.large)
@@ -1094,7 +1100,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
     }
 
     var canStop: Bool {
-        state == .running
+        state == .running || state == .error
     }
 
     var stateLabel: String {

@@ -61,9 +61,10 @@ final class DockerHubConfigurationTests: XCTestCase {
     }
 
     func testGoogleWebsiteRoutingDoesNotChangeDockerHubRules() throws {
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: ["example.com"],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         )
         let baseline = try SingBoxConfigurationBuilder.make(
             outline: outline,

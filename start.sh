@@ -7,10 +7,23 @@ SCRIPT_DIR="${0:A:h}"
 CONFIG_PATH="$SCRIPT_DIR/config.json"
 LOG_PATH="$SCRIPT_DIR/sing-box.log"
 BINARY_PATH="$SCRIPT_DIR/bin/sing-box"
+PID_FILE="/private/tmp/chrome-outline-v1-${UID}.pid"
+EXPECTED_COMMAND="$BINARY_PATH run -c config.json"
 
 if (( $# > 1 )); then
   print -u2 "Usage: ./start.sh ['ss://...']"
   exit 2
+fi
+
+if [[ -r "$PID_FILE" ]]; then
+  recorded_pid="$(<"$PID_FILE")"
+  if [[ "$recorded_pid" == <-> ]]; then
+    current_command="$(/bin/ps -ww -p "$recorded_pid" -o command= 2>/dev/null || true)"
+    if [[ "$current_command" == "$EXPECTED_COMMAND" ]]; then
+      print -u2 "This project's sing-box is already running. PID: $recorded_pid. Run ./stop.sh before starting again."
+      exit 1
+    fi
+  fi
 fi
 
 if (( $# == 1 )); then
@@ -133,7 +146,13 @@ config = {
                 ],
                 "action": "route",
                 "outbound": "outline",
-            }
+            },
+            {
+                "ip_version": 6,
+                "action": "reject",
+                "method": "default",
+                "no_drop": True,
+            },
         ],
         "final": "direct",
     },
@@ -152,20 +171,6 @@ cd "$SCRIPT_DIR"
 if ! "$BINARY_PATH" check -c config.json; then
   print -u2 "sing-box check failed. The TUN was not started."
   exit 1
-fi
-
-PID_FILE="/private/tmp/chrome-outline-v1-${UID}.pid"
-EXPECTED_COMMAND="$BINARY_PATH run -c config.json"
-
-if [[ -r "$PID_FILE" ]]; then
-  recorded_pid="$(<"$PID_FILE")"
-  if [[ "$recorded_pid" == <-> ]]; then
-    current_command="$(/bin/ps -ww -p "$recorded_pid" -o command= 2>/dev/null || true)"
-    if [[ "$current_command" == "$EXPECTED_COMMAND" ]]; then
-      print "This project's sing-box is already running. PID: $recorded_pid"
-      exit 0
-    fi
-  fi
 fi
 
 /usr/bin/sudo -v

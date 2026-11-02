@@ -546,9 +546,10 @@ final class SingBoxConfigurationTests: XCTestCase {
             "https://chatgpt.com",
             to: []
         )
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: customHostnames,
-            isEnabled: false
+            googleIsEnabled: false,
+            chatGPTIsEnabled: false
         )
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
@@ -731,9 +732,10 @@ final class SingBoxConfigurationTests: XCTestCase {
             outline: outline,
             chromeBundlePath: "/Applications/Google Chrome.app"
         )
-        let emptyEffective = try GoogleWebsiteRouting.effectiveHostnames(
+        let emptyEffective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: [],
-            isEnabled: false
+            googleIsEnabled: false,
+            chatGPTIsEnabled: false
         )
         let emptyDisabled = try SingBoxConfigurationBuilder.make(
             outline: outline,
@@ -751,9 +753,10 @@ final class SingBoxConfigurationTests: XCTestCase {
             chromeBundlePath: "/Applications/Google Chrome.app",
             proxyWebsiteHostnames: ["chatgpt.com"]
         )
-        let customEffective = try GoogleWebsiteRouting.effectiveHostnames(
+        let customEffective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: ["chatgpt.com"],
-            isEnabled: false
+            googleIsEnabled: false,
+            chatGPTIsEnabled: false
         )
         let customDisabled = try SingBoxConfigurationBuilder.make(
             outline: outline,
@@ -768,9 +771,10 @@ final class SingBoxConfigurationTests: XCTestCase {
     }
 
     func testGoogleWebsiteRoutingUsesExistingExactHostnameRuleShape() throws {
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: [],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         )
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
@@ -822,9 +826,10 @@ final class SingBoxConfigurationTests: XCTestCase {
     }
 
     func testGoogleAndCustomDuplicateGeneratesOneExactHostnameRulePair() throws {
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: ["accounts.google.com"],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         )
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,
@@ -841,9 +846,10 @@ final class SingBoxConfigurationTests: XCTestCase {
     }
 
     func testGoogleWebsiteRulesPrecedeUnchangedCodexAndGitRules() throws {
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: ["example.com"],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         )
         let chromeOnly = try SingBoxConfigurationBuilder.make(
             outline: outline,
@@ -877,9 +883,10 @@ final class SingBoxConfigurationTests: XCTestCase {
     }
 
     func testSyntheticGoogleWebsiteConfigurationPassesBundledSingBoxCheck() throws {
-        let effective = try GoogleWebsiteRouting.effectiveHostnames(
+        let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: ["example.com"],
-            isEnabled: true
+            googleIsEnabled: true,
+            chatGPTIsEnabled: false
         )
         let configuration = try SingBoxConfigurationBuilder.make(
             outline: outline,

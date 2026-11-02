@@ -97,40 +97,23 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                 let outline = try OutlineAccessKeyParser.parse(accessKey)
                 let validatedProxyWebsiteHostnames = try ProxyWebsiteHostnameNormalizer
                     .validateEffectiveNormalizedList(proxyWebsiteHostnames)
-                let configuration: SingBoxConfiguration
-                if codexEnabled
-                    || gitEnabled
-                    || dockerEnabled
-                    || kubernetesEnabled
-                    || containerRegistriesEnabled
-                    || homebrewEnabled {
-                    configuration = try SingBoxConfigurationBuilder.make(
-                        outline: outline,
-                        chromeBundlePath: validatedChromePath,
-                        codexExecutablePath: codexInstallation?.executablePath,
-                        vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
-                        gitInstallation: gitInstallation,
-                        dockerHubInstallation: dockerEnabled ? dockerHubInstallation : nil,
-                        kubernetesInstallation: kubernetesEnabled
-                            ? dockerBackendInstallation
-                            : nil,
-                        containerRegistriesInstallation: containerRegistriesEnabled
-                            ? dockerBackendInstallation
-                            : nil,
-                        homebrewEnabled: homebrewInstallation != nil,
-                        homebrewGitInstallation: homebrewGitInstallation,
-                        proxyWebsiteHostnames: validatedProxyWebsiteHostnames
-                    )
-                } else {
-                    guard let validatedChromePath else {
-                        throw SingBoxConfigurationError.invalidChromeBundlePath
-                    }
-                    configuration = try SingBoxConfigurationBuilder.make(
-                        outline: outline,
-                        chromeBundlePath: validatedChromePath,
-                        proxyWebsiteHostnames: validatedProxyWebsiteHostnames
-                    )
-                }
+                let configuration = try SingBoxConfigurationBuilder.make(
+                    outline: outline,
+                    chromeBundlePath: validatedChromePath,
+                    codexExecutablePath: codexInstallation?.executablePath,
+                    vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
+                    gitInstallation: gitInstallation,
+                    dockerHubInstallation: dockerHubInstallation,
+                    kubernetesInstallation: kubernetesEnabled
+                        ? dockerBackendInstallation
+                        : nil,
+                    containerRegistriesInstallation: containerRegistriesEnabled
+                        ? dockerBackendInstallation
+                        : nil,
+                    homebrewEnabled: homebrewInstallation != nil,
+                    homebrewGitInstallation: homebrewGitInstallation,
+                    proxyWebsiteHostnames: validatedProxyWebsiteHostnames
+                )
                 let configurationData = try configuration.encodedJSON()
                 let pid = try self.controller.start(
                     configurationData: configurationData,

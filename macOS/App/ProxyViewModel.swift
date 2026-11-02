@@ -206,7 +206,7 @@ final class ProxyViewModel: ObservableObject {
     }
 
     var canStop: Bool {
-        state == .running
+        state == .running || state == .error
     }
 
     var trafficIsUnavailable: Bool {
@@ -439,7 +439,7 @@ final class ProxyViewModel: ObservableObject {
     }
 
     func removeChromeECHIntegration() {
-        guard state != .running, state != .starting, state != .stopping else {
+        guard !canStop, state != .starting, state != .stopping else {
             message = "Stop the proxy before restoring the Chrome ECH setting."
             return
         }
@@ -727,6 +727,13 @@ final class ProxyViewModel: ObservableObject {
     }
 
     private func performChromeECHRemoval(reopenChrome: Bool) {
+        guard !canStop, state != .starting, state != .stopping else {
+            message = "Stop the proxy before restoring the Chrome ECH setting."
+            if reopenChrome {
+                try? chromeECHManager.reopenChrome()
+            }
+            return
+        }
         do {
             switch try chromeECHManager.removeIntegration() {
             case .removed:
