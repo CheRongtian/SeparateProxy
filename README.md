@@ -51,7 +51,7 @@ The macOS app provides:
 - Start Proxy and Stop Proxy controls;
 - a privileged helper registered with `SMAppService`;
 - mutually authenticated XPC between the app and helper;
-- a bundled, project-private, patched sing-box 1.13.19 binary;
+- a bundled, project-private, patched sing-box 1.13.21 binary;
 - session-level Proxy and Direct traffic counters exposed through a root-only read-only path;
 - root-owned runtime configuration, log, and PID files.
 
@@ -59,7 +59,7 @@ It does not provide multiple proxy nodes, subscriptions, GeoIP, rule feeds, spee
 
 ## Runtime requirements
 
-- macOS 13 or later;
+- macOS 26 or later for the bundled kernel: both the preserved 1.13.19 binary and the rebuilt 1.13.21 binary declare Mach-O `minos 26.0`. The Swift project deployment target remains macOS 13; that target alone does not establish support for running the bundled kernel on older macOS releases;
 - Apple silicon, because the bundled sing-box binary and supported Codex extension platform are `darwin/arm64`;
 - a valid static Outline `ss://` access key;
 - administrator approval for the privileged helper;
@@ -77,7 +77,7 @@ The full Xcode app is not required to run an already built and signed app. The G
 - Xcode and a local Apple Development signing identity;
 - a 10-character Apple Team ID and unique app bundle identifier;
 - Go 1.25.3 when reproducing the bundled sing-box binary exactly;
-- Git and network access to obtain the exact upstream sing-box source and Go modules.
+- `curl`, `tar`, `patch`, and network access to obtain the commit-pinned upstream source archive and Go modules. The kernel build does not run Git.
 
 The legacy CLI scripts additionally expect `/opt/homebrew/bin/python3` and interactive administrator authorization.
 
@@ -167,15 +167,16 @@ www.googleapis.com
 
 The first nine have core or entry-workflow evidence for Google Search, Drive, Account/OAuth, and Gemini. `jnn-pa.googleapis.com` and `www.googleapis.com` are narrowly scoped proactive compatibility candidates supported by static/official evidence. The complete 11-host set has been implemented and validated offline; manual SeparateProxy runtime validation is pending. It does not represent all Google traffic and excludes YouTube, Meet media, general Google Cloud traffic, Firebase, App Engine, ads, analytics, Chrome update, and Safe Browsing.
 
-The built-in ChatGPT option targets these 3 exact hostnames:
+The built-in ChatGPT option targets these 4 exact hostnames:
 
 ```text
 chatgpt.com
 ws.chatgpt.com
 cdn.platform.openai.com
+files.oaiusercontent.com
 ```
 
-This set follows a Chrome Network observation in which `https://cdn.platform.openai.com/deployments/dil/v14/runner.html` returned HTTP 403 through a SIN Cloudflare node. Adding the exact `cdn.platform.openai.com` hostname to Custom Websites and restarting SeparateProxy changed the observed request to HTTP 200 through an ATL node, after which the GPT-6 final answer loaded. This records the observed recovery and does not establish a deeper sing-box, Cloudflare, or ChatGPT root cause.
+The original three-host set follows a Chrome Network observation in which `https://cdn.platform.openai.com/deployments/dil/v14/runner.html` returned HTTP 403 through a SIN Cloudflare node. Adding the exact `cdn.platform.openai.com` hostname to Custom Websites and restarting SeparateProxy changed the observed request to HTTP 200 through an ATL node, after which the GPT-6 final answer loaded. This records the observed recovery and does not establish a deeper sing-box, Cloudflare, or ChatGPT root cause. The exact `files.oaiusercontent.com` entry covers the file service identified in [OpenAI's network recommendations](https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps); it does not imply routing the entire `oaiusercontent.com` domain.
 
 Custom Website users can paste a hostname or a complete HTTPS URL, and the app stores only its normalized exact hostname:
 
@@ -187,7 +188,7 @@ https://www.youtube.com/watch?v=abc123
 
 Input is trimmed, parsed with Foundation, converted to lowercase ASCII/Punycode, deduplicated, and sorted. Only HTTPS with no credentials and no explicit port other than 443 is accepted. IP literals, wildcards, suffix rules, paths as routing criteria, and malformed DNS labels are rejected.
 
-A Custom Websites entry for `chatgpt.com` matches only `chatgpt.com`. It does not imply `ab.chatgpt.com`, `api.chatgpt.com`, or `evilchatgpt.com`. The ChatGPT built-in option contributes only its three listed exact hostnames; it does not add wildcard OpenAI or CDN domains.
+A Custom Websites entry for `chatgpt.com` matches only `chatgpt.com`. It does not imply `ab.chatgpt.com`, `api.chatgpt.com`, or `evilchatgpt.com`. The ChatGPT built-in option contributes only its four listed exact hostnames; it does not add wildcard OpenAI or CDN domains.
 
 For one effective hostname such as `chatgpt.com`, the generated Chrome rules are equivalent to this order. The port-443 route applies to both TCP and UDP because it intentionally omits a `network` restriction:
 
@@ -201,7 +202,7 @@ For one effective hostname such as `chatgpt.com`, the generated Chrome rules are
       { "process_path_regex": ["^/Applications/Google Chrome\\.app/"], "network": "udp", "port": 443, "action": "sniff", "sniffer": ["quic"] },
       { "process_path_regex": ["^/Applications/Google Chrome\\.app/"], "network": "tcp", "port": 80, "action": "sniff", "sniffer": ["http"] },
       { "process_path_regex": ["^/Applications/Google Chrome\\.app/"], "domain": ["chatgpt.com"], "port": 80, "action": "route", "override_address": "chatgpt.com", "outbound": "outline" },
-      { "process_path_regex": ["^/Applications/Google Chrome\\.app/"], "domain": ["chatgpt.com"], "port": 443, "action": "route", "override_address": "chatgpt.com", "outbound": "outline" }
+      { "process_path_regex": ["^/Applications/Google Chrome\\.app/"], "domain": ["chatgpt.com"], "port": 443, "action": "route", "override_address": "chatgpt.com", "udp_domain_nat": true, "outbound": "outline" }
     ],
     "final": "direct"
   }
@@ -210,9 +211,11 @@ For one effective hostname such as `chatgpt.com`, the generated Chrome rules are
 
 The first rule is a browser-wide compatibility rule. It rejects Chrome IPv6 before hostname sniffing so Chrome can retry over IPv4. This behavior is independent of the later Website Proxy/Direct decision. Sniff actions inspect TLS SNI, QUIC ClientHello, or HTTP Host metadata and do not override the destination. Each exact hostname has its own route rules because `override_address` is a static string. A matching rule restores the destination to that hostname while retaining the original port, so Shadowsocks carries a DOMAIN destination and the Outline server resolves it. After IPv4 fallback, configured exact hostnames use Outline and ordinary Chrome websites reach `final: direct`.
 
+For selected exact ChatGPT hostnames on port 443, `udp_domain_nat` enables the scoped association handling described under Patch 4. It only affects successfully classified QUIC UDP; TCP keeps its existing DOMAIN recovery. Google, other Custom Websites and non-Chrome targets omit this option. There is no new DNS transport, DNS interception or browser configuration.
+
 With Google and ChatGPT disabled and an empty Custom Websites list, only the browser-wide Chrome IPv6 compatibility rule is generated. No Chrome TLS, QUIC, HTTP, or website-route rules are generated. Chrome IPv4 traffic therefore reaches `final: direct`, and Website Routing does not require ECH to be disabled. Either built-in option or a non-empty Custom Websites list activates the same existing sniff and exact-host route shape and requires the existing ECH visibility condition. Secure DNS is not a Website Routing prerequisite.
 
-Custom Websites retains its 100-host product limit. The 11 Google and 3 ChatGPT built-in hostnames do not consume that quota. The effective-list limit is derived from those collections and is currently 114. A Custom entry that duplicates either built-in collection produces one route pair while remaining stored as Custom data, so it continues to work after that built-in option is disabled.
+Custom Websites retains its 100-host product limit. The 11 Google and 4 ChatGPT built-in hostnames do not consume that quota. The effective-list limit is derived from those collections and is currently 115. A Custom entry that duplicates either built-in collection produces one route pair while remaining stored as Custom data, so it continues to work after that built-in option is disabled.
 
 The first app launch after this update performs a one-time ChatGPT migration. If the old Custom Websites list contains exact `chatgpt.com`, the app enables the built-in ChatGPT option and removes `chatgpt.com`, `cdn.platform.openai.com`, and `ws.chatgpt.com` when present; every other Custom entry remains unchanged. The app persists the enabled state before the cleaned list and writes the completion marker last. Restarting after an interrupted migration therefore preserves an already enabled ChatGPT selection. Once marked complete, later manual Custom Websites changes never retrigger the migration or override a manually disabled ChatGPT option. Users without legacy `chatgpt.com` remain disabled by default.
 
@@ -265,7 +268,7 @@ With Codex selected and Chrome unselected, the generated rules are equivalent to
 ]
 ```
 
-In sing-box 1.13.19, `port` is the destination-port rule field. The sniff rule is limited to the exact validated Codex executable, TCP, and destination port 443. The route rule sends all remaining traffic from that executable through Outline without IPv6, UDP, or DNS restrictions.
+In sing-box 1.13.21, `port` is the destination-port rule field. The sniff rule is limited to the exact validated Codex executable, TCP, and destination port 443. The route rule sends all remaining traffic from that executable through Outline without IPv6, UDP, or DNS restrictions.
 
 The two additional rules support the Codex Work locally usage and remaining-allowance request. The first inspects TLS ClientHello from the exact shared `Code Helper (Plugin)` executable without rewriting or routing it. The second matches only TLS SNI/domain `chatgpt.com` on TCP/443, replaces the destination with `chatgpt.com:443`, and routes it through Outline. This lets the Outline server resolve the domain without adding a sing-box DNS configuration.
 
@@ -870,7 +873,7 @@ When replacing a build containing an updated helper or sing-box:
 
 The current app has no **Replace Helper** or **Disable Helper** action, no unregister flow, and no automatic helper-binary version replacement workflow. First installation continues to use steps 10–12 above; the System Settings disable-and-replace sequence applies to updates that contain a changed helper or bundled sing-box.
 
-This update raises the shared effective Website Routing limit from 111 to 114. An older installed helper still contains the 111-host validator and can reject a new app request that uses the full combined capacity. Follow the disable-and-replace sequence above so the app and helper use the same Core validation logic before relying on more than 111 effective hostnames.
+The shared effective Website Routing limit is now 115. Older helpers may contain the 111- or 114-host validator and can reject a new app request that uses the full combined capacity. Follow the disable-and-replace sequence above so the app, helper and embedded kernel are updated together. The new `udp_domain_nat` option also requires the patched kernel; an original 1.13.21 kernel cannot validate a new ChatGPT configuration containing that option.
 
 ## Tests
 
@@ -887,205 +890,143 @@ xcodebuild \
   test
 ```
 
-They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google and ChatGPT sets, the derived effective 114-host limit, all built-in switch combinations, merge and deduplication, one-time ChatGPT migration and interruption recovery, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, separate Docker backend and bundled-CLI discovery capabilities, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart, post-launch metadata persistence failure, helper-owned unresolved in-memory process handling, exit confirmation against the exact `Process` lifetime, identity mismatch not being accepted as confirmed exit, prevention of a second launch while exit remains unconfirmed, cleanup only after confirmed exit, secure runtime-file negative cases and digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
+They cover Outline parsing, Custom Website normalization and its 100-host limit, the frozen Google and ChatGPT sets, the derived effective 115-host limit, all built-in switch combinations, merge and deduplication, one-time ChatGPT migration and interruption recovery, ECH activation combinations, exact Chrome website destination recovery, unchanged Codex/Git/Docker ordering, exact Codex matching, Codex discovery/validation, active Apple/Xcode Git discovery and helper validation, exact Git HTTPS/443 rules, separate Docker backend and bundled-CLI discovery capabilities, exact Docker Hub HTTPS rules and exclusions, the Kubernetes official-registry exact catalog, shared Docker/Kubernetes/Container Registries backend sniffing, Kubernetes registry exclusions, exact `gcr.io` scope and exclusions, synthetic Docker-backed target combinations, default-prefix Homebrew discovery, exact Homebrew curl routes and exclusions, scoped Homebrew self-update Git rules, Git/Homebrew combinations, signing requirements, synthetic sing-box checks, active configuration identity reuse/restart, post-launch metadata persistence failure, helper-owned unresolved in-memory process handling, exit confirmation against the exact `Process` lifetime, identity mismatch not being accepted as confirmed exit, prevention of a second launch while exit remains unconfirmed, cleanup only after confirmed exit, secure runtime-file negative cases and digest metadata, legacy Chrome DNS migration, independent DNS/ECH safety and restoration, managed ECH policy behavior, traffic snapshot validation, fixed XPC fields, and monotonic rate/reset handling.
 
 This command does not run upstream sing-box Go tests.
 
 ### Go patch tests
 
-This repository does not vendor the upstream sing-box tree. It includes the exact Patch 3 production/test diff at `patches/sing-box-1.13.19-patch3-traffic-accounting.patch`. Apply Patch 1 and Patch 2 as documented below, apply that patch file, then run:
+`build-sing-box.sh` builds the private kernel and runs `route/rule`, `route`, `protocol/shadowsocks` and `experimental/trafficaccounting`, followed by the targeted `TestUDPMessageTooLong` tests in the private sing dependency. It uses the upstream build tags and linker flags for both build and tests. Patch 2 retains its four sniff-option regression tests; Patch 3 retains its original production and test diff unchanged.
+
+To rerun these tests in the patched source directory printed by the build script:
 
 ```bash
-GOCACHE=/private/tmp/separateproxy-go-test-cache \
+GOTOOLCHAIN=local \
+GOCACHE=/private/tmp/separateproxy-go-build-cache \
 GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
-go test ./route/rule
-
-GOCACHE=/private/tmp/separateproxy-go-test-cache \
-GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
-go test ./experimental/trafficaccounting
+go test -buildvcs=false -mod=readonly -tags "$(cat release/DEFAULT_BUILD_TAGS)" \
+  -ldflags "$(cat release/LDFLAGS)" \
+  ./route/rule ./route ./protocol/shadowsocks ./experimental/trafficaccounting
 ```
 
-The route-rule cases cover Patch 2 defaults and field preservation. The accounting cases cover TCP/UDP direction and isolation, monotonic snapshots, session identity, the fixed JSON schema, one-snapshot socket behavior, permissions, cleanup, safe stale-socket replacement, refusal to delete regular files or symlinks, and listener-failure isolation.
+The route-rule cases cover Patch 2 defaults and field preservation, together with the upstream routing tests. The accounting cases cover TCP/UDP direction and isolation, monotonic snapshots, session identity, the fixed JSON schema, one-snapshot socket behavior, permissions, cleanup, safe stale-socket replacement, refusal to delete regular files or symlinks, and listener-failure isolation.
+
+The initial 1.13.21 upgrade was validated with Go 1.25.3 and Xcode 26.2: both Go test packages, all 220 existing Swift tests, and the unsigned `darwin/arm64` app build passed before replacing the project binary. That upgrade exposed a pre-existing missing `return` in `FakeProcessManager.matchesExpectedProcess`; adding it was that upgrade's only Swift source change. Its production configuration generator and helper were unchanged.
+
+The targeted reliability update was subsequently validated with the same Go 1.25.3 and Xcode 26.2: all five Go test groups, 223 Swift tests (zero failures or skips), synthetic configuration checks for all seven target classes, and the unsigned app/Helper build passed in an isolated project copy before replacing `bin/sing-box`. The 10 targeted UDP/replay tests and their 39 subcases also passed the race detector. The original three patches and the earlier controller-test repair were preserved byte for byte. These are offline results; real Chrome page loading, response speed, complete consecutive answers and image/file upload remain user acceptance checks.
 
 ## Why sing-box is patched
 
 ```text
-sing-box: 1.13.19
-commit: b5ebaa1fc0f2b94256180b95468e73ef53caa27d
+sing-box: 1.13.21
+upstream tag: v1.13.21
+commit: 628cb31ffa79cffffd34c2f9cde6cae044e4fc12
 platform: darwin/arm64
-Go: 1.25.3
+Go used: 1.25.3
+upstream go.mod minimum: 1.24.7
 ```
+
+The source is pinned to the [v1.13.21 commit](https://github.com/SagerNet/sing-box/commit/628cb31ffa79cffffd34c2f9cde6cae044e4fc12). Compared with 1.13.19, its `go.mod` updates `sing` from 0.8.13 to 0.8.14, `sing-tun` from `0.8.12-0.20260810140523-7c73233bd0fb` to 0.8.15, `sing-quic` from `0.6.4-0.20260803041914-d83826c306d7` to 0.6.5, and the Tailscale dependency from `1.92.4-sing-box-1.13-mod.9` to `mod.10`.
+
+The [sing-tun update](https://github.com/SagerNet/sing-tun/compare/7c73233bd0fb...v0.8.15) includes system-stack fixes for TCP NAT port reuse across address families and TCP packets of an unconfigured address family. Its IPv4/IPv6 loopback-address rewriting blocks and Darwin TUN implementation are unchanged. `sing-quic` 0.6.5 points to the same source commit as the previous pseudo-version, and `quic-go` stays at `0.59.0-sing-box-mod.4`; the version change alone establishes no new QUIC fix. That version upgrade alone added no project-specific QUIC or loopback patch. The later targeted UDP and replay repairs are documented separately as Patches 4–6 below. These upstream changes do not establish that ChatGPT or Codex connection failures are resolved.
 
 ### Patch 1: Darwin TUN interface refresh
 
-The Darwin CLI interface snapshot can precede TUN creation. Patch 1 refreshes interfaces synchronously after TUN configuration and before stack creation:
+The Darwin CLI interface snapshot can precede TUN creation. Patch 1 refreshes interfaces synchronously after TUN configuration and before stack creation, retaining the existing TUN-close and error handling:
 
-```diff
-@@ -364,6 +364,19 @@
-         if err != nil {
-             return E.Cause(err, "configure tun interface")
-         }
-+        if C.IsDarwin && t.platformInterface == nil {
-+            updateErr := t.networkManager.UpdateInterfaces()
-+            if updateErr != nil {
-+                closeErr := tunInterface.Close()
-+                if closeErr != nil {
-+                    return E.Errors(
-+                        E.Cause(updateErr, "update interfaces after configuring TUN"),
-+                        E.Cause(closeErr, "close TUN interface"),
-+                    )
-+                }
-+                return E.Cause(updateErr, "update interfaces after configuring TUN")
-+            }
-+        }
-         t.logger.Trace("creating stack")
+```text
+patches/sing-box-1.13.21-patch1-darwin-tun-interface-refresh.patch
 ```
 
-It does not modify `isLocalSource`, process matchers, sing-tun, or route semantics and contains no sleep/retry loop.
+The relevant upstream `protocol/tun/inbound.go` is identical between the pinned 1.13.19 and 1.13.21 sources and still lacks this refresh. The patch retains its existing semantics. It does not modify `isLocalSource`, process matchers, sing-tun, or route semantics and contains no sleep/retry loop.
 
 ### Patch 2: TLS SNI destination recovery
 
-Patch 2 was introduced for native Codex and is also reused by the Apple/Xcode Git HTTPS target. Docker Hub uses the same existing hostname-destination mechanism through per-domain `override_address`; it requires no additional sing-box patch. Stock 1.13.19 already has runtime `RuleActionSniff.OverrideDestination` logic, while its JSON option does not expose the boolean.
+Patch 2 exposes `override_destination` in JSON sniff options and copies it into the existing runtime `RuleActionSniff.OverrideDestination` field. Default remains `false`. Both affected upstream files, `option/rule_action.go` and `route/rule/rule_action.go`, are identical between the pinned versions and still require the patch:
 
-```diff
-diff --git a/option/rule_action.go b/option/rule_action.go
---- a/option/rule_action.go
-+++ b/option/rule_action.go
-@@
- type RouteActionSniff struct {
--    Sniffer badoption.Listable[string] `json:"sniffer,omitempty"`
--    Timeout badoption.Duration         `json:"timeout,omitempty"`
-+    Sniffer             badoption.Listable[string] `json:"sniffer,omitempty"`
-+    Timeout             badoption.Duration         `json:"timeout,omitempty"`
-+    OverrideDestination bool                       `json:"override_destination,omitempty"`
- }
-
-diff --git a/route/rule/rule_action.go b/route/rule/rule_action.go
---- a/route/rule/rule_action.go
-+++ b/route/rule/rule_action.go
-@@
-     case C.RuleActionTypeSniff:
-         sniffAction := &RuleActionSniff{
--            SnifferNames: action.SniffOptions.Sniffer,
--            Timeout:      time.Duration(action.SniffOptions.Timeout),
-+            SnifferNames:        action.SniffOptions.Sniffer,
-+            Timeout:             time.Duration(action.SniffOptions.Timeout),
-+            OverrideDestination: action.SniffOptions.OverrideDestination,
-         }
+```text
+patches/sing-box-1.13.21-patch2-tls-sni-destination-recovery.patch
 ```
 
-Default remains `false`. `route/route.go`, TLS sniffing, metadata, Shadowsocks, and DNS code remain unchanged. With valid SNI, existing runtime logic changes `IP:port` to `hostname:port`; Shadowsocks carries a DOMAIN destination for remote resolution.
-
-No SNI, ECH, timeout, or non-TLS traffic retains the original destination. If that original destination is wrong, the fallback connection may fail.
+Native Codex and Apple/Xcode Git HTTPS reuse this behavior. With valid SNI, existing runtime logic changes `IP:port` to `hostname:port`; Shadowsocks carries a DOMAIN destination for remote resolution. Missing SNI, ECH, timeout, or non-TLS traffic retains the original destination. Docker-related and Homebrew rules keep their existing exact-hostname `override_address` behavior. Patch 2 itself does not change the runtime routing, TLS sniffing, metadata, Shadowsocks or DNS implementations.
 
 ### Patch 3: minimal outbound traffic accounting
 
 Patch 3 uses the existing Router `ConnectionTracker` hook after the final outbound has been selected. Box initialization registers one tracker only when `experimental.traffic_accounting.enabled` is true. The tracker wraps already-selected `outline` and `direct` TCP/UDP flows with the existing `sing/common/bufio` counter wrappers and four `atomic.Uint64` values.
 
-The patch does not change route selection, TUN, Direct, Shadowsocks, TLS sniffing, destination overrides, or Router forwarding order. It adds a root-only Unix listener that writes one read-only snapshot per connection. Listener and serialization failures are contained inside the optional accounting service and cannot fail Box startup or forwarding.
-
-The exact production and test diff is stored at:
+The original patch applies to 1.13.21 unchanged; its filename retains the version for which it was first created:
 
 ```text
 patches/sing-box-1.13.19-patch3-traffic-accounting.patch
 ```
 
+The patch preserves counter direction, session identity, JSON schema, the fixed root-only Unix socket, and failure isolation. Listener and serialization failures cannot fail Box startup or forwarding. The Swift reader and traffic UI keep their existing behavior.
+
+### Patch 4: scoped ChatGPT UDP DOMAIN association
+
+`patches/sing-box-1.13.21-patch4-udp-domain-association.patch` adds the default-off `udp_domain_nat` route option. The configuration generator emits it only for selected exact ChatGPT hosts on port 443. Runtime handling additionally requires QUIC UDP, an original IP destination on port 443, the matching sniffed DOMAIN destination, no pre-resolved addresses, and the existing non-connected, non-FakeIP mapping path.
+
+On the dedicated, non-multiplexed Shadowsocks UDP socket, the new wrapper accepts writes only to that one DOMAIN target. Replies have already passed Shadowsocks decoding; an IP reply with the expected source port is restored to the association's DOMAIN source, which the unchanged route NAT maps back to Chrome's original IP A. This also handles a remote source B different from A. A second write target, another source port or another DOMAIN source is rejected. Address state is per association, with no global learned IP/domain table. TCP, Direct, UDP-over-TCP and multiplexed sessions retain their existing paths.
+
+Memory-only tests use the real Shadowsocks codec, ConnectionManager and route NAT to cover A=B, A!=B, consecutive packets, concurrent associations, target isolation, source validation, closure and payload accounting. They also verify that default-off and Direct paths retain their existing address behavior.
+
+### Patch 5: QUIC cached-packet replay order
+
+`patches/sing-box-1.13.21-patch5-quic-replay-order.patch` reverses only the construction loop for cached packet wrappers in `route/route.go`. P1 becomes the outermost cached packet, so normal reads and `bufio.CopyPacket` replay P1, P2, P3 in receive order. Payloads, destinations, buffer ownership and the statistics wrapper are preserved.
+
+The route tests reuse the pinned upstream's static Chrome Initial fixtures, including real two- and three-packet ClientHellos. They exercise QUIC decryption/sniffing, route selection, cache wrapping and packet copy for one/two/three-packet success, failed sniff with Direct forwarding, and sniff timeout with Direct forwarding. The pre-fix source fails the multi-packet order assertions; the patch passes them and verifies destination preservation, accounting and buffer release. No packet-capture test or live QUIC connection is run.
+
+### Patch 6: sing v0.8.14 oversized UDP handling
+
+`patches/sing-0.8.14-patch6-udp-emsgsize.patch` backports the necessary behavior from [sing commit 226df743](https://github.com/SagerNet/sing/commit/226df7434a641138880b6d6afa0414fdc24edf42) onto v0.8.14, fixed at `87773cc9c5b2a4e4fc05cbd2db304ba23ca13515`. It changes ordinary packet copy, cached packet writes and the read-waiter copy path to drop `EMSGSIZE` packets and continue. Other errors retain their existing handling. The platform constants are defined in the existing POSIX and Windows files; no batch-copy framework is introduced.
+
+The build uses a private source copy and a temporary `go.mod` replacement inside the build directory. Shared module-cache sources are never patched. Tests exercise normal/oversized/normal packets, read and write errors, a final oversized cached packet, successful-byte accounting, buffer release, association survival and ordinary fatal errors. TUN MTU, buffer sizes, timeouts and retry policy are unchanged.
+
 ### Reproduce the patched binary
 
-The repository stores the binary, the documented Patch 1/Patch 2 diffs, and a ready-to-apply Patch 3 file. It does not store the upstream tree.
+From the SeparateProxy repository root, run:
 
 ```bash
-git clone https://github.com/SagerNet/sing-box.git
-cd sing-box
-git checkout b5ebaa1fc0f2b94256180b95468e73ef53caa27d
-test "$(git rev-parse HEAD)" = b5ebaa1fc0f2b94256180b95468e73ef53caa27d
+kernel_work=$(mktemp -d /private/tmp/separateproxy-kernel.XXXXXX)
+./build-sing-box.sh "$kernel_work"
 ```
 
-Apply Patch 1 and Patch 2 above. Then add `route/rule/rule_action_sniff_override_test.go`:
+The script downloads sing-box and sing at their fixed commits, applies Patches 1–5 to sing-box and Patch 6 to its private sing v0.8.14 copy with zero fuzz, builds `darwin/arm64` with CGO and the upstream `release/DEFAULT_BUILD_TAGS` and `release/LDFLAGS`, then runs the Go patch tests. It uses the installed Go toolchain, refuses to reuse an existing source directory, disables VCS stamping, and leaves `bin/sing-box` untouched. Go modules and compilation caches default to `/private/tmp/separateproxy-go-mod-cache` and `/private/tmp/separateproxy-go-build-cache`; normal Go environment overrides remain available.
 
-```go
-package rule
-
-import (
-    "context"
-    "encoding/json"
-    "reflect"
-    "testing"
-    "time"
-
-    "github.com/sagernet/sing-box/option"
-)
-
-func TestRuleActionSniffOverrideDestinationDefaultsFalse(t *testing.T) {
-    action := parseRuntimeSniffAction(t, `{"action":"sniff"}`)
-    if action.OverrideDestination { t.Fatal("override_destination must default to false") }
-}
-
-func TestRuleActionSniffOverrideDestinationTrue(t *testing.T) {
-    action := parseRuntimeSniffAction(t, `{"action":"sniff","override_destination":true}`)
-    if !action.OverrideDestination { t.Fatal("override_destination=true was not copied") }
-}
-
-func TestRuleActionSniffOverrideDestinationExplicitFalse(t *testing.T) {
-    action := parseRuntimeSniffAction(t, `{"action":"sniff","override_destination":false}`)
-    if action.OverrideDestination { t.Fatal("override_destination=false was not preserved") }
-}
-
-func TestRuleActionSniffOverrideDestinationPreservesExistingFields(t *testing.T) {
-    action := parseRuntimeSniffAction(t, `{"action":"sniff","sniffer":["tls"],"timeout":"1s","override_destination":true}`)
-    if !reflect.DeepEqual(action.SnifferNames, []string{"tls"}) { t.Fatalf("unexpected sniffers: %v", action.SnifferNames) }
-    if action.Timeout != time.Second { t.Fatalf("unexpected timeout: %v", action.Timeout) }
-    if !action.OverrideDestination { t.Fatal("override_destination=true was not preserved") }
-}
-
-func parseRuntimeSniffAction(t *testing.T, input string) *RuleActionSniff {
-    t.Helper()
-    var options option.RuleAction
-    if err := json.Unmarshal([]byte(input), &options); err != nil { t.Fatal(err) }
-    action, err := NewRuleAction(context.Background(), nil, options)
-    if err != nil { t.Fatal(err) }
-    sniffAction, ok := action.(*RuleActionSniff)
-    if !ok { t.Fatalf("unexpected runtime type: %T", action) }
-    return sniffAction
-}
-```
-
-Apply Patch 3 from the SeparateProxy repository root path:
+Before replacing the project binary, run the existing Swift tests and app build in a temporary project copy containing the candidate kernel:
 
 ```bash
-patch -p1 < /path/to/SeparateProxy/patches/sing-box-1.13.19-patch3-traffic-accounting.patch
+mkdir "$kernel_work/validation"
+cp -R macOS bin "$kernel_work/validation/"
+cp "$kernel_work/sing-box-1.13.21" "$kernel_work/validation/bin/sing-box"
+xcodebuild \
+  -project "$kernel_work/validation/macOS/SeparateProxy.xcodeproj" \
+  -scheme SeparateProxy \
+  -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath "$kernel_work/DerivedData" \
+  CODE_SIGNING_ALLOWED=NO \
+  build test
 ```
 
-Format, test, and build using upstream defaults:
+The existing tests generate synthetic configurations for all seven target classes and invoke `sing-box check`; they do not start TUN or contact the Outline server. Unsigned validation does not install or launch SeparateProxy or register its helper. Building an installable signed app afterward still requires the existing local signing configuration.
+
+Only after the kernel build, Go tests, Swift configuration tests, and app build succeed, preserve the original three-patch 1.13.21 binary and replace the project binary. Keep the earlier 1.13.19 backup intact:
 
 ```bash
-gofmt -w protocol/tun/inbound.go option/rule_action.go \
-  route/rule/rule_action.go route/rule/rule_action_sniff_override_test.go \
-  option/experimental.go box.go \
-  experimental/trafficaccounting/service.go \
-  experimental/trafficaccounting/service_test.go
-
-GOCACHE=/private/tmp/separateproxy-go-test-cache \
-GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
-go test ./route/rule
-
-GOCACHE=/private/tmp/separateproxy-go-test-cache \
-GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
-go test ./experimental/trafficaccounting
-
-GOCACHE=/private/tmp/separateproxy-go-build-cache \
-GOMODCACHE=/private/tmp/separateproxy-go-mod-cache \
-make build \
-  VERSION=1.13.19 \
-  COMMIT=b5ebaa1fc0f2b94256180b95468e73ef53caa27d \
-  TAGS="$(<release/DEFAULT_BUILD_TAGS)"
-
-./sing-box version
-cp ./sing-box /path/to/SeparateProxy/bin/sing-box
-chmod 755 /path/to/SeparateProxy/bin/sing-box
+# Keep this backup intact on subsequent builds.
+cp -pn bin/sing-box bin/sing-box-1.13.21-original
+cp "$kernel_work/sing-box-1.13.21" bin/sing-box
+chmod 755 bin/sing-box
 ```
 
-Do not overwrite Homebrew or Cellar. Run the SeparateProxy Xcode tests afterward to validate synthetic configs with the private binary.
+To restore the preserved three-patch 1.13.21 kernel:
+
+```bash
+cp -p bin/sing-box-1.13.21-original bin/sing-box
+```
+
+The backup is a directly executable copy of the original private binary. Kernel rollback must use the original App/Helper and configuration generator together: the original kernel does not support `udp_domain_nat`. Preserve the old installed `.app` before a manual update; restoring that complete bundle also restores its matching Helper and kernel. For a source rollback, restore the pre-change Core/configuration source along with the binary. The Xcode project embeds only `bin/sing-box`; backups are not bundled. Rebuild and install the app through the existing workflow when choosing either kernel. Do not overwrite Homebrew or Cellar, operate a running SeparateProxy instance, or change system network settings during build validation. ChatGPT and Codex connection stability remains a user acceptance check after installation.
 
 ## Troubleshooting and engineering postmortem
 
@@ -1150,11 +1091,11 @@ The generated policy now appends one generic IPv6 reject after every explicit ta
 
 The V1 tradeoff is deliberate: while SeparateProxy is active, IPv6-only Direct destinations are unsupported by this fallback behavior.
 
-### Investigated source-level risk: multi-packet QUIC sniff replay order
+### Source-confirmed and offline-tested fix: multi-packet QUIC replay order
 
-Static review of the pinned sing-box 1.13.19 source at commit `b5ebaa1fc0f2b94256180b95468e73ef53caa27d` indicated a possible reverse-order cached-packet replay in the multi-packet QUIC sniff path caused by successive nested cached-packet wrappers. This could affect a fragmented or multi-packet QUIC ClientHello, including traffic that would otherwise remain Direct.
+The pinned 1.13.19 and 1.13.21 routes construct cached-packet wrappers in receive order, causing the outermost wrapper to replay the last cached datagram first. A real fragmented Chrome ClientHello reproduces the reverse order through the route and packet-copy chain, including failed/timeout sniff paths that continue through Direct. Patch 5 reverses wrapper construction and preserves receive order.
 
-The evidence level is an investigated source-level risk. It was not runtime-confirmed and was not established as the Website Routing regression cause. The repository does not vendor the upstream source tree and contains no QUIC replay fix, corresponding test, or Patch 4. The runtime-confirmed regression remains the Chrome IPv6 fallback behavior described above.
+The behavior and repair are verified offline using static upstream QUIC fixtures. QUIC can tolerate reordering, so this does not establish the cause of a historical ChatGPT failure or prove end-to-end browser stability. The separately runtime-confirmed Chrome IPv6 fallback behavior described above remains unchanged.
 
 ### Resolved high-confidence root cause: Codex routed through Outline but reconnected
 
@@ -1228,7 +1169,7 @@ The app refreshes at launch, after operations, and on manual refresh; it does no
 6. inspect whether TLS, QUIC, or HTTP sniffing produced the expected exact `metadata.Domain`;
 7. confirm the matching route contains `override_address` equal to that exact hostname;
 8. compare the observed hostname with the list entry, including subdomain;
-9. account for connection coalescing, IP-literal, no-SNI, malformed, unsupported/future QUIC traffic, or the investigated multi-packet replay risk.
+9. account for connection coalescing, IP-literal, no-SNI, malformed or unsupported/future QUIC traffic; confirm the installed app includes Patches 4–6 before assuming the offline-verified UDP fixes are active.
 
 ### Direct website unexpectedly affected
 
@@ -1458,7 +1399,7 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.
 - Helper identifier changes require explicit old-registration cleanup.
-- Reproduction requires manual application of the README-inline Patch 1 and Patch 2 diffs. Patch 3 is vendored as the ready-to-apply `patches/sing-box-1.13.19-patch3-traffic-accounting.patch`; the upstream sing-box source tree is not vendored.
+- Reproduction uses `build-sing-box.sh` and three ready-to-apply patch files. Patch 3 retains its original 1.13.19 filename and applies unchanged to 1.13.21; the upstream sing-box source tree is not vendored.
 
 ## Repository privacy
 

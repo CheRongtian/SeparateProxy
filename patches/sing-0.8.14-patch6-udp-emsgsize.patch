@@ -1,0 +1,316 @@
+--- a/common/bufio/copy.go
++++ b/common/bufio/copy.go
+@@ -313,6 +313,9 @@
+ 		destinationAddress, err = source.ReadPacket(buffer)
+ 		if err != nil {
+ 			buffer.Release()
++			if errors.Is(err, errMessageTooLong) {
++				continue
++			}
+ 			return
+ 		}
+ 		dataLen := buffer.Len()
+@@ -320,6 +323,9 @@
+ 		err = destination.WritePacket(buffer, destinationAddress)
+ 		if err != nil {
+ 			buffer.Leak()
++			if errors.Is(err, errMessageTooLong) {
++				continue
++			}
+ 			if !notFirstTime {
+ 				err = N.ReportHandshakeFailure(originSource, err)
+ 			}
+@@ -346,6 +352,10 @@
+ 		N.PutPacketBuffer(packetBuffer)
+ 		if err != nil {
+ 			buffer.Leak()
++			if errors.Is(err, errMessageTooLong) {
++				err = nil
++				continue
++			}
+ 			if !notFirstTime {
+ 				err = N.ReportHandshakeFailure(originSource, err)
+ 			}
+--- a/common/bufio/copy_direct.go
++++ b/common/bufio/copy_direct.go
+@@ -106,12 +106,18 @@
+ 	for {
+ 		buffer, destination, err = source.WaitReadPacket()
+ 		if err != nil {
++			if errors.Is(err, errMessageTooLong) {
++				continue
++			}
+ 			return
+ 		}
+ 		dataLen := buffer.Len()
+ 		err = destinationConn.WritePacket(buffer, destination)
+ 		if err != nil {
+ 			buffer.Leak()
++			if errors.Is(err, errMessageTooLong) {
++				continue
++			}
+ 			if !notFirstTime {
+ 				err = N.ReportHandshakeFailure(originSource, err)
+ 			}
+--- a/common/bufio/copy_direct_posix.go
++++ b/common/bufio/copy_direct_posix.go
+@@ -16,6 +16,8 @@
+ 
+ 	"golang.org/x/sys/unix"
+ )
++
++const errMessageTooLong = unix.EMSGSIZE
+ 
+ var _ N.ReadWaiter = (*syscallReadWaiter)(nil)
+ 
+--- a/common/bufio/copy_direct_windows.go
++++ b/common/bufio/copy_direct_windows.go
+@@ -13,6 +13,8 @@
+ 
+ 	"golang.org/x/sys/windows"
+ )
++
++const errMessageTooLong = windows.WSAEMSGSIZE
+ 
+ var _ N.ReadWaiter = (*syscallReadWaiter)(nil)
+ 
+--- /dev/null
++++ b/common/bufio/copy_emsgsize_test.go
+@@ -0,0 +1,237 @@
++package bufio
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net"
++	"os"
++	"reflect"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing/common/buf"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func TestUDPMessageTooLongCopy(t *testing.T) {
++	for _, path := range []string{"regular", "cached", "read-waiter"} {
++		for _, readError := range []bool{false, true} {
++			if path == "cached" && readError {
++				continue
++			}
++			t.Run(path+map[bool]string{false: "-write", true: "-read"}[readError], func(t *testing.T) {
++				source, destination := newMessageConn(), newMessageConn()
++				defer source.Close()
++				defer destination.Close()
++				events := []messagePacket{{data: "one"}, {data: "oversize"}, {data: "three"}}
++				if readError {
++					events[1] = messagePacket{err: os.NewSyscallError("recvmsg", errMessageTooLong)}
++				}
++				reader, buffers := messageSource(source, path, events)
++				source.in <- messagePacket{err: io.EOF}
++				var reads, writes int64
++				countedSource := NewCounterPacketConn(reader, []N.CountFunc{func(n int64) { reads += n }}, nil)
++				countedDestination := NewCounterPacketConn(destination, nil, []N.CountFunc{func(n int64) { writes += n }})
++				n, err := CopyPacket(countedDestination, countedSource)
++				if !errors.Is(err, io.EOF) || n != 8 || reads != 8 || writes != 8 {
++					t.Fatalf("copy did not continue or changed accounting: n=%d r=%d w=%d err=%v", n, reads, writes, err)
++				}
++				var delivered []string
++				for len(destination.out) > 0 {
++					delivered = append(delivered, (<-destination.out).data)
++				}
++				if !reflect.DeepEqual(delivered, []string{"one", "three"}) {
++					t.Fatalf("wrong packets: %v", delivered)
++				}
++				for _, buffer := range append(buffers, source.buffers...) {
++					if buffer.Cap() != 0 {
++						t.Fatal("processed buffer was not released")
++					}
++				}
++				if waiter, ok := reader.(*messageWaitConn); ok && waiter.waits == 0 {
++					t.Fatal("read-waiter bypassed")
++				}
++			})
++		}
++	}
++}
++
++func TestUDPMessageTooLongOtherErrors(t *testing.T) {
++	for _, path := range []string{"regular", "cached", "read-waiter"} {
++		t.Run(path, func(t *testing.T) {
++			source, destination := newMessageConn(), newMessageConn()
++			defer source.Close()
++			defer destination.Close()
++			reader, _ := messageSource(source, path, []messagePacket{{data: "one"}, {data: "fatal"}})
++			n, err := CopyPacket(destination, reader)
++			if n != 3 || !errors.Is(err, io.ErrUnexpectedEOF) {
++				t.Fatalf("ordinary write error changed: n=%d err=%v", n, err)
++			}
++		})
++	}
++}
++
++func TestUDPMessageTooLongLastCachedPacket(t *testing.T) {
++	conn := newMessageConn()
++	defer conn.Close()
++	buffer := buf.NewPacket()
++	buffer.WriteString("oversize")
++	packet := N.NewPacketBuffer()
++	*packet = N.PacketBuffer{Buffer: buffer, Destination: messageAddress}
++	n, err := WritePacketWithPool(conn, conn, []*N.PacketBuffer{packet}, nil, nil)
++	if err != nil || n != 0 || buffer.Cap() != 0 {
++		t.Fatalf("last cached EMSGSIZE propagated: %d %v", n, err)
++	}
++}
++
++func TestUDPMessageTooLongAssociation(t *testing.T) {
++	for _, path := range []string{"regular", "cached", "read-waiter"} {
++		t.Run(path, func(t *testing.T) {
++			source, destination := newMessageConn(), newMessageConn()
++			defer source.Close()
++			defer destination.Close()
++			reader, _ := messageSource(source, path, []messagePacket{{data: "one"}, {data: "oversize"}, {data: "three"}})
++			done := make(chan error, 1)
++			go func() { done <- CopyPacketConn(context.Background(), reader, destination) }()
++			for _, expected := range []string{"one", "three"} {
++				select {
++				case packet := <-destination.out:
++					if packet.data != expected {
++						t.Fatalf("wrong packet: %+v", packet)
++					}
++				case <-time.After(3 * time.Second):
++					t.Fatal("association stopped after oversized packet")
++				}
++			}
++			select {
++			case err := <-done:
++				t.Fatalf("association ended early: %v", err)
++			default:
++			}
++			select {
++			case <-source.done:
++				t.Fatal("source closed after EMSGSIZE")
++			default:
++			}
++			select {
++			case <-destination.done:
++				t.Fatal("destination closed after EMSGSIZE")
++			default:
++			}
++			source.in <- messagePacket{err: io.ErrUnexpectedEOF}
++			select {
++			case err := <-done:
++				if !errors.Is(err, io.ErrUnexpectedEOF) {
++					t.Fatalf("fatal error changed: %v", err)
++				}
++			case <-time.After(3 * time.Second):
++				t.Fatal("fatal error did not terminate association")
++			}
++			for _, conn := range []*messageConn{source, destination} {
++				select {
++				case <-conn.done:
++				default:
++					t.Fatal("fatal cleanup left a connection open")
++				}
++			}
++		})
++	}
++}
++
++var messageAddress = M.ParseSocksaddr("192.0.2.1:443")
++
++type messagePacket struct {
++	data string
++	err  error
++}
++type messageConn struct {
++	in, out chan messagePacket
++	done    chan struct{}
++	once    sync.Once
++	buffers []*buf.Buffer
++}
++
++func newMessageConn() *messageConn {
++	return &messageConn{in: make(chan messagePacket, 8), out: make(chan messagePacket, 8), done: make(chan struct{})}
++}
++func (c *messageConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
++	c.buffers = append(c.buffers, buffer)
++	select {
++	case packet := <-c.in:
++		if packet.err != nil {
++			return M.Socksaddr{}, packet.err
++		}
++		_, err := buffer.WriteString(packet.data)
++		return messageAddress, err
++	case <-c.done:
++		return M.Socksaddr{}, io.EOF
++	}
++}
++func (c *messageConn) WritePacket(buffer *buf.Buffer, address M.Socksaddr) error {
++	defer buffer.Release()
++	if address != messageAddress {
++		return os.ErrInvalid
++	}
++	data := string(buffer.Bytes())
++	if data == "oversize" {
++		return os.NewSyscallError("sendmsg", errMessageTooLong)
++	}
++	if data == "fatal" {
++		return io.ErrUnexpectedEOF
++	}
++	c.out <- messagePacket{data: data}
++	return nil
++}
++func (c *messageConn) Close() error                     { c.once.Do(func() { close(c.done) }); return nil }
++func (c *messageConn) LocalAddr() net.Addr              { return messageAddress }
++func (c *messageConn) SetDeadline(time.Time) error      { return os.ErrInvalid }
++func (c *messageConn) SetReadDeadline(time.Time) error  { return os.ErrInvalid }
++func (c *messageConn) SetWriteDeadline(time.Time) error { return os.ErrInvalid }
++
++type messageWaitConn struct {
++	*messageConn
++	options N.ReadWaitOptions
++	waits   int
++}
++
++func (c *messageWaitConn) InitializeReadWaiter(options N.ReadWaitOptions) bool {
++	c.options = options
++	return false
++}
++func (c *messageWaitConn) WaitReadPacket() (*buf.Buffer, M.Socksaddr, error) {
++	c.waits++
++	buffer := c.options.NewPacketBuffer()
++	address, err := c.messageConn.ReadPacket(buffer)
++	if err != nil {
++		buffer.Release()
++		return nil, M.Socksaddr{}, err
++	}
++	c.options.PostReturn(buffer)
++	return buffer, address, nil
++}
++func messageSource(conn *messageConn, path string, events []messagePacket) (N.PacketConn, []*buf.Buffer) {
++	if path == "read-waiter" {
++		for _, event := range events {
++			conn.in <- event
++		}
++		return &messageWaitConn{messageConn: conn}, nil
++	}
++	if path != "cached" {
++		for _, event := range events {
++			conn.in <- event
++		}
++		return conn, nil
++	}
++	var reader N.PacketConn = conn
++	var buffers []*buf.Buffer
++	for i := len(events) - 1; i >= 0; i-- {
++		buffer := buf.NewPacket()
++		buffer.WriteString(events[i].data)
++		buffers = append(buffers, buffer)
++		reader = NewCachedPacketConn(reader, buffer, messageAddress)
++	}
++	return reader, buffers
++}

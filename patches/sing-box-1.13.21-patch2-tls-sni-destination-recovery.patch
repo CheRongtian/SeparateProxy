@@ -1,0 +1,93 @@
+--- a/option/rule_action.go
++++ b/option/rule_action.go
+@@ -302,8 +302,9 @@
+ }
+ 
+ type RouteActionSniff struct {
+-	Sniffer badoption.Listable[string] `json:"sniffer,omitempty"`
+-	Timeout badoption.Duration         `json:"timeout,omitempty"`
++	Sniffer             badoption.Listable[string] `json:"sniffer,omitempty"`
++	Timeout             badoption.Duration         `json:"timeout,omitempty"`
++	OverrideDestination bool                       `json:"override_destination,omitempty"`
+ }
+ 
+ type RouteActionResolve struct {
+--- a/route/rule/rule_action.go
++++ b/route/rule/rule_action.go
+@@ -101,8 +101,9 @@
+ 		return &RuleActionHijackDNS{}, nil
+ 	case C.RuleActionTypeSniff:
+ 		sniffAction := &RuleActionSniff{
+-			SnifferNames: action.SniffOptions.Sniffer,
+-			Timeout:      time.Duration(action.SniffOptions.Timeout),
++			SnifferNames:        action.SniffOptions.Sniffer,
++			Timeout:             time.Duration(action.SniffOptions.Timeout),
++			OverrideDestination: action.SniffOptions.OverrideDestination,
+ 		}
+ 		return sniffAction, sniffAction.build()
+ 	case C.RuleActionTypeResolve:
+--- /dev/null
++++ b/route/rule/rule_action_sniff_override_test.go
+@@ -0,0 +1,62 @@
++package rule
++
++import (
++	"context"
++	"encoding/json"
++	"reflect"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/option"
++)
++
++func TestRuleActionSniffOverrideDestinationDefaultsFalse(t *testing.T) {
++	action := parseRuntimeSniffAction(t, `{"action":"sniff"}`)
++	if action.OverrideDestination {
++		t.Fatal("override_destination must default to false")
++	}
++}
++
++func TestRuleActionSniffOverrideDestinationTrue(t *testing.T) {
++	action := parseRuntimeSniffAction(t, `{"action":"sniff","override_destination":true}`)
++	if !action.OverrideDestination {
++		t.Fatal("override_destination=true was not copied")
++	}
++}
++
++func TestRuleActionSniffOverrideDestinationExplicitFalse(t *testing.T) {
++	action := parseRuntimeSniffAction(t, `{"action":"sniff","override_destination":false}`)
++	if action.OverrideDestination {
++		t.Fatal("override_destination=false was not preserved")
++	}
++}
++
++func TestRuleActionSniffOverrideDestinationPreservesExistingFields(t *testing.T) {
++	action := parseRuntimeSniffAction(t, `{"action":"sniff","sniffer":["tls"],"timeout":"1s","override_destination":true}`)
++	if !reflect.DeepEqual(action.SnifferNames, []string{"tls"}) {
++		t.Fatalf("unexpected sniffers: %v", action.SnifferNames)
++	}
++	if action.Timeout != time.Second {
++		t.Fatalf("unexpected timeout: %v", action.Timeout)
++	}
++	if !action.OverrideDestination {
++		t.Fatal("override_destination=true was not preserved")
++	}
++}
++
++func parseRuntimeSniffAction(t *testing.T, input string) *RuleActionSniff {
++	t.Helper()
++	var options option.RuleAction
++	if err := json.Unmarshal([]byte(input), &options); err != nil {
++		t.Fatal(err)
++	}
++	action, err := NewRuleAction(context.Background(), nil, options)
++	if err != nil {
++		t.Fatal(err)
++	}
++	sniffAction, ok := action.(*RuleActionSniff)
++	if !ok {
++		t.Fatalf("unexpected runtime type: %T", action)
++	}
++	return sniffAction
++}

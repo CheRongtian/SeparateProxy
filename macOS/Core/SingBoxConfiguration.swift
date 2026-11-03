@@ -45,6 +45,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
             public let protocolName: String?
             public let domains: [String]?
             public let overrideAddress: String?
+            public let udpDomainNAT: Bool?
             public let method: String?
             public let noDrop: Bool?
             public let outbound: String?
@@ -58,6 +59,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
                 case protocolName = "protocol"
                 case domains = "domain"
                 case overrideAddress = "override_address"
+                case udpDomainNAT = "udp_domain_nat"
                 case noDrop = "no_drop"
             }
 
@@ -72,6 +74,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
                 protocolName: String? = nil,
                 domains: [String]? = nil,
                 overrideAddress: String? = nil,
+                udpDomainNAT: Bool? = nil,
                 method: String? = nil,
                 noDrop: Bool? = nil,
                 outbound: String? = nil
@@ -86,6 +89,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
                 self.protocolName = protocolName
                 self.domains = domains
                 self.overrideAddress = overrideAddress
+                self.udpDomainNAT = udpDomainNAT
                 self.method = method
                 self.noDrop = noDrop
                 self.outbound = outbound
@@ -339,6 +343,8 @@ public enum SingBoxConfigurationBuilder {
                         action: "route",
                         domains: [hostname],
                         overrideAddress: hostname,
+                        udpDomainNAT: port == 443 && ChatGPTWebsiteRouting.hostnames.contains(hostname)
+                            ? true : nil,
                         outbound: "outline"
                     )
                 )

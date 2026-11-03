@@ -541,6 +541,51 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.route.rules.first?.action, "reject")
     }
 
+    func testUDPDomainNATIsLimitedToSelectedChatGPT443Rules() throws {
+        let hostnames = Array(Set(
+            ChatGPTWebsiteRouting.hostnames + GoogleWebsiteRouting.hostnames
+                + ["other.example", "foo.chatgpt.com"]
+        )).sorted()
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app",
+            codexExecutablePath: codexPath,
+            vsCodePluginHelperExecutablePath: vsCodePluginHelperPath,
+            gitInstallation: gitInstallation,
+            dockerHubInstallation: dockerInstallation,
+            homebrewEnabled: true,
+            proxyWebsiteHostnames: hostnames
+        )
+        let chromeRegex = [#"^/Applications/Google Chrome\.app/"#]
+        for rule in configuration.route.rules {
+            let hostname = rule.domains?.first ?? ""
+            let enabled = rule.processPathRegex == chromeRegex
+                && rule.action == "route" && rule.destinationPort == 443
+                && ChatGPTWebsiteRouting.hostnames.contains(hostname)
+            XCTAssertEqual(rule.udpDomainNAT, enabled ? true : nil, hostname)
+            if enabled {
+                XCTAssertEqual(rule.overrideAddress, hostname)
+                XCTAssertEqual(rule.outbound, "outline")
+                XCTAssertNil(rule.network)
+            }
+        }
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: configuration.encodedJSON()) as? [String: Any]
+        )
+        XCTAssertNil(json["dns"])
+        XCTAssertEqual(configuration.route.final, "direct")
+        assertChromeIPv6CompatibilityRule(configuration.route.rules[0])
+        assertDirectIPv6FallbackGuard(configuration)
+    }
+
+    func testEmptyChromeSelectionDoesNotEnableUDPDomainNAT() throws {
+        let configuration = try SingBoxConfigurationBuilder.make(
+            outline: outline,
+            chromeBundlePath: "/Applications/Google Chrome.app"
+        )
+        XCTAssertTrue(configuration.route.rules.allSatisfy { $0.udpDomainNAT == nil })
+    }
+
     func testConfigurationBuilderDoesNotImplicitlyExpandChatGPTHostname() throws {
         let customHostnames = try ProxyWebsiteHostnameNormalizer.adding(
             "https://chatgpt.com",
@@ -583,9 +628,9 @@ final class SingBoxConfigurationTests: XCTestCase {
         let runtimeHostnames = Set(configuration.route.rules.flatMap { $0.domains ?? [] })
 
         XCTAssertEqual(customHostnames.count, 100)
-        XCTAssertEqual(effective.count, 114)
+        XCTAssertEqual(effective.count, 115)
         XCTAssertEqual(runtimeHostnames, Set(effective))
-        XCTAssertEqual(runtimeHostnames.count, 114)
+        XCTAssertEqual(runtimeHostnames.count, 115)
     }
 
     func testChatGPTRulesDisappearWhenTheirOnlyCustomHostnameIsRemoved() throws {
@@ -667,6 +712,7 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(effective.filter { $0 == "accounts.google.com" }.count, 1)
         XCTAssertTrue(effective.contains("ws.chatgpt.com"))
         XCTAssertTrue(effective.contains("cdn.platform.openai.com"))
+        XCTAssertTrue(effective.contains("files.oaiusercontent.com"))
         XCTAssertEqual(
             routeRules.flatMap { $0.domains ?? [] },
             expectedEffective.flatMap { [$0, $0] }

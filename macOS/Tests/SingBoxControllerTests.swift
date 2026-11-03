@@ -882,7 +882,7 @@ private final class FakeProcessManager: SingBoxProcessManaging {
         if let matchesExpectedProcessOverride {
             return matchesExpectedProcessOverride
         }
-        verifiedPIDs.contains(pid)
+        return verifiedPIDs.contains(pid)
     }
 
     func launch(

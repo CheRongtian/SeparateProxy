@@ -25,10 +25,14 @@ public enum ChatGPTWebsiteRouting {
         "chatgpt.com",
         "ws.chatgpt.com",
         "cdn.platform.openai.com",
+        "files.oaiusercontent.com",
     ]
 
     private static let legacyTriggerHostname = "chatgpt.com"
-    private static let migratedCustomHostnames = Set(hostnames)
+    // Preserve the original migration's three-host cleanup scope.
+    private static let migratedCustomHostnames = Set([
+        "chatgpt.com", "ws.chatgpt.com", "cdn.platform.openai.com",
+    ])
 
     public static func migrateLegacyConfiguration(
         customHostnames: [String],

@@ -1,0 +1,22 @@
+--- a/protocol/tun/inbound.go
++++ b/protocol/tun/inbound.go
+@@ -364,6 +364,19 @@
+ 		if err != nil {
+ 			return E.Cause(err, "configure tun interface")
+ 		}
++		if C.IsDarwin && t.platformInterface == nil {
++			updateErr := t.networkManager.UpdateInterfaces()
++			if updateErr != nil {
++				closeErr := tunInterface.Close()
++				if closeErr != nil {
++					return E.Errors(
++						E.Cause(updateErr, "update interfaces after configuring TUN"),
++						E.Cause(closeErr, "close TUN interface"),
++					)
++				}
++				return E.Cause(updateErr, "update interfaces after configuring TUN")
++			}
++		}
+ 		t.logger.Trace("creating stack")
+ 		t.tunIf = tunInterface
+ 		var (

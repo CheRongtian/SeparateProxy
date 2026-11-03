@@ -1,0 +1,255 @@
+--- a/route/route.go
++++ b/route/route.go
+@@ -271,7 +271,8 @@
+ 		}
+ 		selectedOutbound = defaultOutbound
+ 	}
+-	for _, buffer := range packetBuffers {
++	for index := len(packetBuffers) - 1; index >= 0; index-- {
++		buffer := packetBuffers[index]
+ 		conn = bufio.NewCachedPacketConn(conn, buffer.Buffer, buffer.Destination)
+ 		N.PutPacketBuffer(buffer)
+ 	}
+--- /dev/null
++++ b/route/packet_replay_test.go
+@@ -0,0 +1,240 @@
++package route
++
++import (
++	"bytes"
++	"context"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"io"
++	"net"
++	"net/netip"
++	"os"
++	"strconv"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/option"
++	"github.com/sagernet/sing/common/buf"
++	"github.com/sagernet/sing/common/bufio"
++	"github.com/sagernet/sing/common/json"
++	"github.com/sagernet/sing/common/logger"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func TestQUICPacketReplay(t *testing.T) {
++	for _, test := range []struct {
++		name, fixture string
++		count         int
++		ending        string
++	}{
++		{"one-success", "TestSniffUQUICChrome115", 1, "success"},
++		{"two-success", "TestSniffQUICChromium", 2, "success"},
++		{"three-success", "TestSniffQUICChromeNew", 3, "success"},
++		{"three-failure-direct", "TestSniffQUICChromeNew", 2, "failure"},
++		{"two-timeout-direct", "TestSniffQUICChromeNew", 2, "timeout"},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			packets := replayQUICFixture(t, test.fixture)[:test.count]
++			if test.ending == "failure" {
++				packets = append(packets, []byte{0})
++			}
++			input := &replayInput{}
++			for i, data := range packets {
++				input.events = append(input.events, replayPacket{data: data, address: M.ParseSocksaddr(fmt.Sprintf("192.0.2.%d:%d", i+1, 443+i))})
++			}
++			if test.ending == "timeout" {
++				input.events = append(input.events, replayPacket{err: os.ErrDeadlineExceeded})
++			}
++			outline, direct := &replayOutbound{tag: "outline"}, &replayOutbound{tag: "direct"}
++			counter := &replayTracker{}
++			r := &Router{ctx: context.Background(), logger: logger.NOP(),
++				dnsTransport: replayDNSTransports{}, dns: replayDNS{},
++				outbound: replayOutbounds{outline: outline, direct: direct}, trackers: []adapter.ConnectionTracker{counter}}
++			var rules []option.Rule
++			if err := json.Unmarshal([]byte(`[
++				{"network":"udp","port":443,"action":"sniff","sniffer":["quic"]},
++				{"domain":["google.com","www.google.com"],"action":"route","outbound":"outline","override_address":"www.google.com","udp_domain_nat":true}
++			]`), &rules); err != nil {
++				t.Fatal(err)
++			}
++			if err := r.Initialize(rules, nil); err != nil {
++				t.Fatal(err)
++			}
++			original := M.ParseSocksaddr("192.0.2.90:443")
++			if err := r.routePacketConnection(context.Background(), input, adapter.InboundContext{Destination: original}, nil); err != nil {
++				t.Fatal(err)
++			}
++			selected, unused := outline, direct
++			if test.ending != "success" {
++				selected, unused = direct, outline
++			}
++			if unused.called || !selected.called {
++				t.Fatal("sniff result changed final routing")
++			}
++			if !errors.Is(selected.err, io.EOF) {
++				t.Fatalf("copy did not reach normal input end: %v", selected.err)
++			}
++			if len(selected.packets) != len(packets) {
++				t.Fatalf("packet count changed: %d", len(selected.packets))
++			}
++			var expectedBytes int64
++			for i, expected := range input.events[:len(packets)] {
++				got := selected.packets[i]
++				if !bytes.Equal(got.data, expected.data) || got.address != expected.address {
++					t.Fatalf("packet %d replayed out of order or with another destination: got %v expected %v", i+1, got.address, expected.address)
++				}
++				expectedBytes += int64(len(expected.data))
++			}
++			if counter.upload != expectedBytes || counter.download != 0 {
++				t.Fatalf("accounting changed: %+v", counter)
++			}
++			if !input.closed {
++				t.Fatal("cached chain did not close the original connection")
++			}
++			for i, buffer := range input.buffers {
++				if buffer.Cap() != 0 {
++					t.Fatalf("buffer %d was not released", i)
++				}
++			}
++			if test.ending == "success" {
++				if selected.metadata.Domain == "" || selected.metadata.RouteOriginalDestination != original ||
++					selected.metadata.Destination.Fqdn != "www.google.com" || !selected.metadata.UDPDomainNAT {
++					t.Fatalf("route override/original address/UDP option changed: %+v", selected.metadata)
++				}
++			} else if selected.metadata.Destination != original || selected.metadata.UDPDomainNAT {
++				t.Fatal("failed sniff changed Direct destination or enabled domain NAT")
++			}
++		})
++	}
++}
++
++// Reuse the pinned upstream's static Chrome Initial fixtures. This performs no
++// socket capture and exercises the actual QUIC decrypt/fragment/sniff path.
++func replayQUICFixture(t *testing.T, name string) [][]byte {
++	t.Helper()
++	file, err := parser.ParseFile(token.NewFileSet(), "../common/sniff/quic_test.go", nil, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var packets [][]byte
++	for _, declaration := range file.Decls {
++		function, ok := declaration.(*ast.FuncDecl)
++		if !ok || function.Name.Name != name {
++			continue
++		}
++		ast.Inspect(function.Body, func(node ast.Node) bool {
++			call, ok := node.(*ast.CallExpr)
++			if !ok {
++				return true
++			}
++			selector, ok := call.Fun.(*ast.SelectorExpr)
++			if !ok || selector.Sel.Name != "DecodeString" {
++				return true
++			}
++			text, err := strconv.Unquote(call.Args[0].(*ast.BasicLit).Value)
++			if err != nil {
++				t.Fatal(err)
++			}
++			packet, err := hex.DecodeString(text)
++			if err != nil {
++				t.Fatal(err)
++			}
++			packets = append(packets, packet)
++			return true
++		})
++	}
++	if len(packets) == 0 {
++		t.Fatalf("upstream QUIC fixture missing: %s", name)
++	}
++	return packets
++}
++
++type replayPacket struct {
++	data    []byte
++	address M.Socksaddr
++	err     error
++}
++type replayInput struct {
++	events  []replayPacket
++	buffers []*buf.Buffer
++	index   int
++	closed  bool
++}
++
++func (c *replayInput) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
++	c.buffers = append(c.buffers, buffer)
++	if c.index == len(c.events) {
++		return M.Socksaddr{}, io.EOF
++	}
++	event := c.events[c.index]
++	c.index++
++	if event.err != nil {
++		return M.Socksaddr{}, event.err
++	}
++	_, err := buffer.Write(event.data)
++	return event.address, err
++}
++func (c *replayInput) WritePacket(buffer *buf.Buffer, _ M.Socksaddr) error {
++	buffer.Release()
++	return os.ErrInvalid
++}
++func (c *replayInput) Close() error                     { c.closed = true; return nil }
++func (c *replayInput) LocalAddr() net.Addr              { return M.ParseSocksaddr("192.0.2.100:50000") }
++func (c *replayInput) SetDeadline(time.Time) error      { return nil }
++func (c *replayInput) SetReadDeadline(time.Time) error  { return nil }
++func (c *replayInput) SetWriteDeadline(time.Time) error { return nil }
++
++type replayOutbound struct {
++	adapter.Outbound
++	tag      string
++	called   bool
++	metadata adapter.InboundContext
++	packets  []replayPacket
++	err      error
++}
++
++func (o *replayOutbound) Tag() string       { return o.tag }
++func (o *replayOutbound) Network() []string { return []string{N.NetworkUDP} }
++func (o *replayOutbound) NewPacketConnectionEx(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ N.CloseHandlerFunc) {
++	o.called, o.metadata = true, metadata
++	_, o.err = bufio.CopyPacket(o, conn)
++	conn.Close()
++}
++func (o *replayOutbound) WritePacket(buffer *buf.Buffer, address M.Socksaddr) error {
++	o.packets = append(o.packets, replayPacket{data: append([]byte(nil), buffer.Bytes()...), address: address})
++	buffer.Release()
++	return nil
++}
++
++type replayOutbounds struct {
++	adapter.OutboundManager
++	outline, direct *replayOutbound
++}
++
++func (m replayOutbounds) Default() adapter.Outbound { return m.direct }
++func (m replayOutbounds) Outbound(tag string) (adapter.Outbound, bool) {
++	return m.outline, tag == "outline"
++}
++
++type replayDNSTransports struct{ adapter.DNSTransportManager }
++
++func (replayDNSTransports) FakeIP() adapter.FakeIPTransport { return nil }
++
++type replayDNS struct{ adapter.DNSRouter }
++
++func (replayDNS) LookupReverseMapping(netip.Addr) (string, bool) { return "", false }
++
++type replayTracker struct{ upload, download int64 }
++
++func (t *replayTracker) RoutedConnection(_ context.Context, conn net.Conn, _ adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) net.Conn {
++	return conn
++}
++func (t *replayTracker) RoutedPacketConnection(_ context.Context, conn N.PacketConn, _ adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
++	return bufio.NewCounterPacketConn(conn, []N.CountFunc{func(n int64) { t.upload += n }}, []N.CountFunc{func(n int64) { t.download += n }})
++}

@@ -225,14 +225,14 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
         }
     }
 
-    func testEffectiveListAcceptsOneHundredFourteenAndRejectsOneHundredFifteen() throws {
-        let accepted = (0..<114).map { "host\($0).example" }
+    func testEffectiveListAcceptsOneHundredFifteenAndRejectsOneHundredSixteen() throws {
+        let accepted = (0..<115).map { "host\($0).example" }
         XCTAssertEqual(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(accepted),
             accepted.sorted()
         )
 
-        let rejected = (0..<115).map { "host\($0).example" }
+        let rejected = (0..<116).map { "host\($0).example" }
         XCTAssertThrowsError(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(rejected)
         ) { error in
@@ -281,11 +281,12 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
         ))
     }
 
-    func testChatGPTWebsiteRoutingContainsExactlyThreeExactHostnames() throws {
+    func testChatGPTWebsiteRoutingContainsExactlyFourExactHostnames() throws {
         XCTAssertEqual(ChatGPTWebsiteRouting.hostnames, [
             "chatgpt.com",
             "ws.chatgpt.com",
             "cdn.platform.openai.com",
+            "files.oaiusercontent.com",
         ])
         XCTAssertEqual(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(
@@ -361,7 +362,7 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
                 + GoogleWebsiteRouting.hostnames.count
                 + ChatGPTWebsiteRouting.hostnames.count
         )
-        XCTAssertEqual(effective.count, 114)
+        XCTAssertEqual(effective.count, 115)
     }
 
     func testChatGPTSwitchRequiresHostnameVisibilityOnlyWhenChromeIsSelected() {
@@ -401,6 +402,16 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
             "www.acgxmh.com",
             "www.wmanhua.com",
         ])
+    }
+
+    func testChatGPTMigrationPreservesFileServiceCustomHostname() {
+        let migration = ChatGPTWebsiteRouting.migrateLegacyConfiguration(
+            customHostnames: ["chatgpt.com", "files.oaiusercontent.com"],
+            isEnabled: false,
+            migrationCompleted: false
+        )
+        XCTAssertTrue(migration.isEnabled)
+        XCTAssertEqual(migration.customHostnames, ["files.oaiusercontent.com"])
     }
 
     func testChatGPTMigrationRecoversAfterHostCleanupBeforeMarkerWrite() {

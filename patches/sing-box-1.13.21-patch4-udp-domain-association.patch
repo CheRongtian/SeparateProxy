@@ -1,0 +1,539 @@
+--- a/adapter/inbound.go
++++ b/adapter/inbound.go
+@@ -67,6 +67,7 @@
+ 	OriginDestination         M.Socksaddr
+ 	RouteOriginalDestination  M.Socksaddr
+ 	UDPDisableDomainUnmapping bool
++	UDPDomainNAT              bool
+ 	UDPConnect                bool
+ 	UDPTimeout                time.Duration
+ 	TLSFragment               bool
+--- a/option/rule_action.go
++++ b/option/rule_action.go
+@@ -162,6 +162,7 @@
+ 	FallbackDelay   uint32           `json:"fallback_delay,omitempty"`
+ 
+ 	UDPDisableDomainUnmapping bool               `json:"udp_disable_domain_unmapping,omitempty"`
++	UDPDomainNAT              bool               `json:"udp_domain_nat,omitempty"`
+ 	UDPConnect                bool               `json:"udp_connect,omitempty"`
+ 	UDPTimeout                badoption.Duration `json:"udp_timeout,omitempty"`
+ 
+--- a/route/rule/rule_action.go
++++ b/route/rule/rule_action.go
+@@ -37,6 +37,7 @@
+ 				NetworkStrategy:           (*C.NetworkStrategy)(action.RouteOptions.NetworkStrategy),
+ 				FallbackDelay:             time.Duration(action.RouteOptions.FallbackDelay),
+ 				UDPDisableDomainUnmapping: action.RouteOptions.UDPDisableDomainUnmapping,
++				UDPDomainNAT:              action.RouteOptions.UDPDomainNAT,
+ 				UDPConnect:                action.RouteOptions.UDPConnect,
+ 				TLSFragment:               action.RouteOptions.TLSFragment,
+ 				TLSFragmentFallbackDelay:  time.Duration(action.RouteOptions.TLSFragmentFallbackDelay),
+@@ -50,6 +51,7 @@
+ 			NetworkStrategy:           (*C.NetworkStrategy)(action.RouteOptionsOptions.NetworkStrategy),
+ 			FallbackDelay:             time.Duration(action.RouteOptionsOptions.FallbackDelay),
+ 			UDPDisableDomainUnmapping: action.RouteOptionsOptions.UDPDisableDomainUnmapping,
++			UDPDomainNAT:              action.RouteOptionsOptions.UDPDomainNAT,
+ 			UDPConnect:                action.RouteOptionsOptions.UDPConnect,
+ 			UDPTimeout:                time.Duration(action.RouteOptionsOptions.UDPTimeout),
+ 			TLSFragment:               action.RouteOptionsOptions.TLSFragment,
+@@ -65,6 +67,7 @@
+ 				NetworkStrategy:           (*C.NetworkStrategy)(action.BypassOptions.NetworkStrategy),
+ 				FallbackDelay:             time.Duration(action.BypassOptions.FallbackDelay),
+ 				UDPDisableDomainUnmapping: action.BypassOptions.UDPDisableDomainUnmapping,
++				UDPDomainNAT:              action.BypassOptions.UDPDomainNAT,
+ 				UDPConnect:                action.BypassOptions.UDPConnect,
+ 				TLSFragment:               action.BypassOptions.TLSFragment,
+ 				TLSFragmentFallbackDelay:  time.Duration(action.BypassOptions.TLSFragmentFallbackDelay),
+@@ -201,6 +204,7 @@
+ 	FallbackNetworkType       []C.InterfaceType
+ 	FallbackDelay             time.Duration
+ 	UDPDisableDomainUnmapping bool
++	UDPDomainNAT              bool
+ 	UDPConnect                bool
+ 	UDPTimeout                time.Duration
+ 	TLSFragment               bool
+--- a/route/route.go
++++ b/route/route.go
+@@ -501,6 +501,9 @@
+ 			}
+ 			if routeOptions.UDPDisableDomainUnmapping {
+ 				metadata.UDPDisableDomainUnmapping = true
++			}
++			if routeOptions.UDPDomainNAT && metadata.Network == N.NetworkUDP {
++				metadata.UDPDomainNAT = true
+ 			}
+ 			if routeOptions.UDPConnect {
+ 				metadata.UDPConnect = true
+--- a/protocol/shadowsocks/outbound.go
++++ b/protocol/shadowsocks/outbound.go
+@@ -119,7 +119,14 @@
+ 			h.logger.InfoContext(ctx, "outbound packet connection to ", destination)
+ 		}
+ 		h.logger.InfoContext(ctx, "outbound packet connection to ", destination)
+-		return (*shadowsocksDialer)(h).ListenPacket(ctx, destination)
++		conn, err := (*shadowsocksDialer)(h).ListenPacket(ctx, destination)
++		if err != nil {
++			return nil, err
++		}
++		if shouldRestoreDomainPacketSource(metadata, destination) {
++			conn = &domainPacketConn{NetPacketConn: bufio.NewPacketConn(conn), destination: destination}
++		}
++		return conn, nil
+ 	} else {
+ 		h.logger.InfoContext(ctx, "outbound multiplex packet connection to ", destination)
+ 		return h.multiplexDialer.ListenPacket(ctx, destination)
+--- /dev/null
++++ b/protocol/shadowsocks/packet_domain.go
+@@ -0,0 +1,78 @@
++package shadowsocks
++
++import (
++	"net"
++	"os"
++
++	"github.com/sagernet/sing-box/adapter"
++	C "github.com/sagernet/sing-box/constant"
++	"github.com/sagernet/sing/common/buf"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func shouldRestoreDomainPacketSource(metadata *adapter.InboundContext, destination M.Socksaddr) bool {
++	return metadata.UDPDomainNAT && metadata.Network == N.NetworkUDP && metadata.Protocol == C.ProtocolQUIC &&
++		metadata.RouteOriginalDestination.IsIP() && metadata.RouteOriginalDestination.Port == 443 &&
++		destination.IsDomain() && destination.Port == 443 && destination.Fqdn == metadata.Domain &&
++		!metadata.UDPConnect && !metadata.UDPDisableDomainUnmapping && !metadata.FakeIP &&
++		len(metadata.DestinationAddresses) == 0
++}
++
++// This wrapper is only installed on a dedicated, non-multiplexed Shadowsocks
++// UDP socket. All requests on it must target the one routed domain. After the
++// Shadowsocks decoder authenticates a reply, restore that domain as its source;
++// the existing route NAT then restores Chrome's original IP. Never learn a
++// global IP/domain mapping or let this association send to a second target.
++type domainPacketConn struct {
++	N.NetPacketConn
++	destination M.Socksaddr
++}
++
++func (c *domainPacketConn) source(source M.Socksaddr) (M.Socksaddr, error) {
++	if source == c.destination || (source.IsIP() && source.Port == c.destination.Port) {
++		return c.destination, nil
++	}
++	return M.Socksaddr{}, os.ErrInvalid
++}
++
++func (c *domainPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
++	source, err := c.NetPacketConn.ReadPacket(buffer)
++	if err != nil {
++		return M.Socksaddr{}, err
++	}
++	return c.source(source)
++}
++
++func (c *domainPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
++	if destination != c.destination {
++		buffer.Release()
++		return os.ErrInvalid
++	}
++	return c.NetPacketConn.WritePacket(buffer, destination)
++}
++
++func (c *domainPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
++	n, addr, err = c.NetPacketConn.ReadFrom(p)
++	if err != nil {
++		return
++	}
++	source, err := c.source(M.SocksaddrFromNet(addr))
++	if err != nil {
++		return 0, nil, err
++	}
++	return n, source, nil
++}
++
++func (c *domainPacketConn) WriteTo(p []byte, destination net.Addr) (int, error) {
++	if M.SocksaddrFromNet(destination) != c.destination {
++		return 0, os.ErrInvalid
++	}
++	return c.NetPacketConn.WriteTo(p, destination)
++}
++
++// Preserve headroom discovery, but do not expose replaceable reader/writer
++// capabilities: a copy fast path must not bypass the address checks above.
++func (c *domainPacketConn) Upstream() any {
++	return c.NetPacketConn
++}
+--- /dev/null
++++ b/protocol/shadowsocks/packet_domain_test.go
+@@ -0,0 +1,335 @@
++package shadowsocks
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/netip"
++	"os"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/adapter/outbound"
++	C "github.com/sagernet/sing-box/constant"
++	"github.com/sagernet/sing-box/route"
++	"github.com/sagernet/sing-shadowsocks2/cipher"
++	"github.com/sagernet/sing-shadowsocks2/shadowaead"
++	"github.com/sagernet/sing/common/buf"
++	"github.com/sagernet/sing/common/bufio"
++	"github.com/sagernet/sing/common/logger"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func domainTestMetadata() adapter.InboundContext {
++	return adapter.InboundContext{
++		Network: N.NetworkUDP, Protocol: C.ProtocolQUIC, Domain: "chatgpt.com", UDPDomainNAT: true,
++		Destination:              M.ParseSocksaddr("chatgpt.com:443"),
++		RouteOriginalDestination: M.ParseSocksaddr("192.0.2.10:443"),
++	}
++}
++
++func TestDomainUDPAssociationScope(t *testing.T) {
++	if m := domainTestMetadata(); !shouldRestoreDomainPacketSource(&m, m.Destination) {
++		t.Fatal("selected QUIC DOMAIN association was not enabled")
++	}
++	for name, change := range map[string]func(*adapter.InboundContext){
++		"default-off":             func(m *adapter.InboundContext) { m.UDPDomainNAT = false },
++		"tcp":                     func(m *adapter.InboundContext) { m.Network = N.NetworkTCP },
++		"not-quic":                func(m *adapter.InboundContext) { m.Protocol = C.ProtocolTLS },
++		"no-original":             func(m *adapter.InboundContext) { m.RouteOriginalDestination = M.Socksaddr{} },
++		"original-domain":         func(m *adapter.InboundContext) { m.RouteOriginalDestination = m.Destination },
++		"other-port":              func(m *adapter.InboundContext) { m.Destination.Port = 8443 },
++		"different-original-port": func(m *adapter.InboundContext) { m.RouteOriginalDestination.Port = 8443 },
++		"different-domain":        func(m *adapter.InboundContext) { m.Domain = "other.example" },
++		"ip-target":               func(m *adapter.InboundContext) { m.Destination = m.RouteOriginalDestination },
++		"resolved-target": func(m *adapter.InboundContext) {
++			m.DestinationAddresses = []netip.Addr{netip.MustParseAddr("192.0.2.20")}
++		},
++		"udp-connect":       func(m *adapter.InboundContext) { m.UDPConnect = true },
++		"disable-unmapping": func(m *adapter.InboundContext) { m.UDPDisableDomainUnmapping = true },
++		"fake-ip":           func(m *adapter.InboundContext) { m.FakeIP = true },
++	} {
++		t.Run(name, func(t *testing.T) {
++			m := domainTestMetadata()
++			change(&m)
++			if shouldRestoreDomainPacketSource(&m, m.Destination) {
++				t.Fatal("unrelated path enabled")
++			}
++		})
++	}
++}
++
++// These use the real ConnectionManager, Shadowsocks codec and existing route
++// NAT. Only the TUN endpoint and outer UDP socket are replaced with memory queues.
++func TestDomainUDPAssociationRoundTrip(t *testing.T) {
++	for _, sameIP := range []bool{true, false} {
++		for _, enabled := range []bool{true, false} {
++			t.Run(fmt.Sprintf("sameIP=%t/enabled=%t", sameIP, enabled), func(t *testing.T) {
++				runDomainRoundTrip(t, 0, sameIP, enabled)
++			})
++		}
++	}
++}
++
++func TestDomainUDPConcurrentAssociations(t *testing.T) {
++	for i := 1; i <= 6; i++ {
++		t.Run(fmt.Sprint(i), func(t *testing.T) {
++			t.Parallel()
++			runDomainRoundTrip(t, i, false, true)
++		})
++	}
++}
++
++func runDomainRoundTrip(t *testing.T, id int, sameIP, enabled bool) {
++	t.Helper()
++	client, server := domainMemoryPair()
++	t.Cleanup(func() { client.Close(); server.Close() })
++	method, err := shadowaead.NewMethod(context.Background(), "aes-256-gcm", cipher.MethodOptions{Password: "test-only-password"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	h := &Outbound{
++		Adapter: outbound.NewAdapter(C.TypeShadowsocks, "outline", []string{N.NetworkTCP, N.NetworkUDP}, nil),
++		logger:  logger.NOP(), dialer: domainMemoryDialer{client}, method: method,
++		serverAddr: M.ParseSocksaddr("192.0.2.1:8388"),
++	}
++	m := domainTestMetadata()
++	m.UDPDomainNAT = enabled
++	m.RouteOriginalDestination = M.ParseSocksaddr(fmt.Sprintf("192.0.2.%d:443", 10+id))
++	m.Destination = M.ParseSocksaddr(fmt.Sprintf("host%d.example:443", id))
++	m.Domain = m.Destination.Fqdn
++	peer := M.ParseSocksaddr(fmt.Sprintf("198.51.100.%d:443", 20+id))
++	if sameIP {
++		peer = m.RouteOriginalDestination
++	}
++	tun := newDomainMemoryPacketConn()
++	var upload, download atomic.Int64
++	counted := bufio.NewCounterPacketConn(tun,
++		[]N.CountFunc{func(n int64) { upload.Add(n) }},
++		[]N.CountFunc{func(n int64) { download.Add(n) }})
++	manager := route.NewConnectionManager(logger.NOP())
++	manager.NewPacketConnection(context.Background(), h, counted, m, nil)
++	t.Cleanup(func() { tun.Close(); manager.Close() })
++	codec := method.DialPacketConn(server)
++	var expectedBytes int64
++	for i := 0; i < 3; i++ {
++		payload := []byte(fmt.Sprintf("association-%d-packet-%d", id, i))
++		expectedBytes += int64(len(payload))
++		tun.in <- domainTestPacket{payload, m.RouteOriginalDestination}
++		buffer := buf.NewPacket()
++		destination, err := codec.ReadPacket(buffer)
++		if err != nil {
++			buffer.Release()
++			t.Fatal(err)
++		}
++		if destination != m.Destination || string(buffer.Bytes()) != string(payload) {
++			buffer.Release()
++			t.Fatal("outbound DOMAIN, payload or association changed")
++		}
++		buffer.Release()
++		if _, err := codec.WriteTo(payload, peer); err != nil {
++			t.Fatal(err)
++		}
++		select {
++		case reply := <-tun.out:
++			expectedSource := peer
++			if enabled {
++				expectedSource = m.RouteOriginalDestination
++			}
++			if reply.address != expectedSource || string(reply.data) != string(payload) {
++				t.Fatalf("wrong reply: %+v, expected %v", reply, expectedSource)
++			}
++		case <-time.After(3 * time.Second):
++			t.Fatal("reply did not reach TUN")
++		}
++	}
++	// Entering the next read proves the previous copy and counter updates finished.
++	for i := 0; i < 4; i++ {
++		select {
++		case <-client.reads:
++		case <-time.After(3 * time.Second):
++			t.Fatal("packet copy did not return to the read loop")
++		}
++	}
++	tun.Close()
++	select {
++	case <-client.done:
++	case <-time.After(3 * time.Second):
++		t.Fatal("association did not close its outer socket")
++	}
++	if upload.Load() != expectedBytes || download.Load() != expectedBytes {
++		t.Fatalf("payload accounting changed: upload=%d download=%d expected=%d", upload.Load(), download.Load(), expectedBytes)
++	}
++}
++
++func TestDomainUDPRejectsSecondTargetAndUnexpectedSource(t *testing.T) {
++	client, server := domainMemoryPair()
++	defer client.Close()
++	defer server.Close()
++	method, err := shadowaead.NewMethod(context.Background(), "aes-256-gcm", cipher.MethodOptions{Password: "test-only-password"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	domain := M.ParseSocksaddr("chatgpt.com:443")
++	wrapped := &domainPacketConn{method.DialPacketConn(client), domain}
++	conn := bufio.NewDestinationNATPacketConn(wrapped, domain, M.ParseSocksaddr("192.0.2.10:443"))
++	if _, err := conn.WriteTo([]byte("other-target"), M.ParseSocksaddr("192.0.2.99:443")); !errors.Is(err, os.ErrInvalid) {
++		t.Fatalf("second destination accepted: %v", err)
++	}
++	if len(server.in) != 0 {
++		t.Fatal("second destination reached Shadowsocks")
++	}
++	buffer := buf.NewPacket()
++	buffer.WriteString("other-target")
++	if err := conn.WritePacket(buffer, M.ParseSocksaddr("192.0.2.99:443")); !errors.Is(err, os.ErrInvalid) {
++		t.Fatalf("packet second destination accepted: %v", err)
++	}
++	for _, source := range []M.Socksaddr{M.ParseSocksaddr("198.51.100.1:8443"), M.ParseSocksaddr("other.example:443"), {}} {
++		if _, err := wrapped.source(source); !errors.Is(err, os.ErrInvalid) {
++			t.Fatalf("unrelated source accepted: %v", source)
++		}
++	}
++	codec := method.DialPacketConn(server)
++	if _, err := codec.WriteTo([]byte("response"), M.ParseSocksaddr("198.51.100.1:443")); err != nil {
++		t.Fatal(err)
++	}
++	data := make([]byte, 1024)
++	n, source, err := conn.ReadFrom(data)
++	if err != nil || source.String() != "192.0.2.10:443" || string(data[:n]) != "response" {
++		t.Fatalf("ReadFrom bypassed NAT: %v %v", source, err)
++	}
++}
++
++func TestDirectUDPAddressSemanticsUnchanged(t *testing.T) {
++	tun, remote := newDomainMemoryPacketConn(), newDomainMemoryPacketConn()
++	defer tun.Close()
++	defer remote.Close()
++	manager := route.NewConnectionManager(logger.NOP())
++	target := M.ParseSocksaddr("192.0.2.8:443")
++	manager.NewPacketConnection(context.Background(), domainDirectDialer{bufio.NewNetPacketConn(remote)}, tun,
++		adapter.InboundContext{Network: N.NetworkUDP, Destination: target}, nil)
++	tun.in <- domainTestPacket{[]byte("direct-request"), target}
++	select {
++	case p := <-remote.out:
++		if p.address != target || string(p.data) != "direct-request" {
++			t.Fatal("Direct destination changed")
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("Direct request missing")
++	}
++	peer := M.ParseSocksaddr("198.51.100.8:443")
++	remote.in <- domainTestPacket{[]byte("direct-reply"), peer}
++	select {
++	case p := <-tun.out:
++		if p.address != peer || string(p.data) != "direct-reply" {
++			t.Fatal("Direct source changed")
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("Direct reply missing")
++	}
++}
++
++type domainTestPacket struct {
++	data    []byte
++	address M.Socksaddr
++}
++type domainMemoryPacketConn struct {
++	in, out chan domainTestPacket
++	done    chan struct{}
++	once    sync.Once
++}
++
++func newDomainMemoryPacketConn() *domainMemoryPacketConn {
++	return &domainMemoryPacketConn{in: make(chan domainTestPacket, 8), out: make(chan domainTestPacket, 8), done: make(chan struct{})}
++}
++func (c *domainMemoryPacketConn) ReadPacket(b *buf.Buffer) (M.Socksaddr, error) {
++	select {
++	case p := <-c.in:
++		_, err := b.Write(p.data)
++		return p.address, err
++	case <-c.done:
++		return M.Socksaddr{}, io.ErrClosedPipe
++	}
++}
++func (c *domainMemoryPacketConn) WritePacket(b *buf.Buffer, address M.Socksaddr) error {
++	defer b.Release()
++	p := domainTestPacket{append([]byte(nil), b.Bytes()...), address}
++	select {
++	case c.out <- p:
++		return nil
++	case <-c.done:
++		return io.ErrClosedPipe
++	}
++}
++func (c *domainMemoryPacketConn) Close() error                     { c.once.Do(func() { close(c.done) }); return nil }
++func (c *domainMemoryPacketConn) LocalAddr() net.Addr              { return M.ParseSocksaddr("192.0.2.100:50000") }
++func (c *domainMemoryPacketConn) SetDeadline(time.Time) error      { return os.ErrInvalid }
++func (c *domainMemoryPacketConn) SetReadDeadline(time.Time) error  { return os.ErrInvalid }
++func (c *domainMemoryPacketConn) SetWriteDeadline(time.Time) error { return os.ErrInvalid }
++
++type domainMemoryConn struct {
++	in    chan []byte
++	reads chan struct{}
++	peer  *domainMemoryConn
++	done  chan struct{}
++	once  sync.Once
++}
++
++func domainMemoryPair() (*domainMemoryConn, *domainMemoryConn) {
++	a := &domainMemoryConn{in: make(chan []byte, 8), reads: make(chan struct{}, 8), done: make(chan struct{})}
++	b := &domainMemoryConn{in: make(chan []byte, 8), reads: make(chan struct{}, 8), done: make(chan struct{})}
++	a.peer = b
++	b.peer = a
++	return a, b
++}
++func (c *domainMemoryConn) Read(p []byte) (int, error) {
++	c.reads <- struct{}{}
++	select {
++	case data := <-c.in:
++		return copy(p, data), nil
++	case <-c.done:
++		return 0, io.ErrClosedPipe
++	case <-time.After(3 * time.Second):
++		return 0, os.ErrDeadlineExceeded
++	}
++}
++func (c *domainMemoryConn) Write(p []byte) (int, error) {
++	select {
++	case c.peer.in <- append([]byte(nil), p...):
++		return len(p), nil
++	case <-c.done:
++		return 0, io.ErrClosedPipe
++	case <-c.peer.done:
++		return 0, io.ErrClosedPipe
++	}
++}
++func (c *domainMemoryConn) Close() error                     { c.once.Do(func() { close(c.done) }); return nil }
++func (c *domainMemoryConn) LocalAddr() net.Addr              { return M.ParseSocksaddr("192.0.2.100:50000") }
++func (c *domainMemoryConn) RemoteAddr() net.Addr             { return M.ParseSocksaddr("192.0.2.1:8388") }
++func (c *domainMemoryConn) SetDeadline(time.Time) error      { return nil }
++func (c *domainMemoryConn) SetReadDeadline(time.Time) error  { return nil }
++func (c *domainMemoryConn) SetWriteDeadline(time.Time) error { return nil }
++
++type domainMemoryDialer struct{ conn net.Conn }
++
++func (d domainMemoryDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
++	return d.conn, nil
++}
++func (d domainMemoryDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
++	return nil, os.ErrInvalid
++}
++
++type domainDirectDialer struct{ conn net.PacketConn }
++
++func (d domainDirectDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
++	return nil, os.ErrInvalid
++}
++func (d domainDirectDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
++	return d.conn, nil
++}
+--- /dev/null
++++ b/route/rule/rule_action_udp_domain_nat_test.go
+@@ -0,0 +1,33 @@
++package rule
++
++import (
++	"context"
++	"testing"
++
++	"github.com/sagernet/sing-box/option"
++	"github.com/sagernet/sing/common/json"
++)
++
++func TestUDPDomainNATRouteOption(t *testing.T) {
++	for _, test := range []struct {
++		input   string
++		enabled bool
++	}{
++		{`{"action":"route","outbound":"outline","override_address":"chatgpt.com"}`, false},
++		{`{"action":"route","outbound":"outline","override_address":"chatgpt.com","udp_domain_nat":true}`, true},
++		{`{"action":"route","outbound":"outline","override_address":"chatgpt.com","udp_domain_nat":false}`, false},
++	} {
++		var options option.RuleAction
++		if err := json.Unmarshal([]byte(test.input), &options); err != nil {
++			t.Fatal(err)
++		}
++		action, err := NewRuleAction(context.Background(), nil, options)
++		if err != nil {
++			t.Fatal(err)
++		}
++		route := action.(*RuleActionRoute)
++		if route.UDPDomainNAT != test.enabled || route.Outbound != "outline" || route.OverrideAddress.Fqdn != "chatgpt.com" {
++			t.Fatalf("route option was not preserved: %+v", route)
++		}
++	}
++}
