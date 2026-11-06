@@ -982,6 +982,35 @@ The route tests reuse the pinned upstream's static Chrome Initial fixtures, incl
 
 The build uses a private source copy and a temporary `go.mod` replacement inside the build directory. Shared module-cache sources are never patched. Tests exercise normal/oversized/normal packets, read and write errors, a final oversized cached packet, successful-byte accounting, buffer release, association survival and ordinary fatal errors. TUN MTU, buffer sizes, timeouts and retry policy are unchanged.
 
+### Patches 7–8: TCP half-close correctness (stage one)
+
+These two patches are one functional change and must be built together:
+
+```text
+patches/sing-box-1.13.21-patch7-tcp-half-close.patch
+patches/sing-shadowsocks2-0.2.1-patch8-tcp-half-close.patch
+SS2 v0.2.1 commit: 1f9f20777fd1aedc3aeaebbc08fad00a2e2f8c40
+```
+
+Patch 7 adapts only the applicable ConnectionManager behavior from [60f0a036](https://github.com/SagerNet/sing-box/commit/60f0a0369b1829f02205a1a77246412cf9366645). On normal TCP EOF it unwraps counters and replaceable writers to find `CloseWrite`, leaving the reverse copy and tracked connection alive. It does not replace the writer used for application data. The two copy directions share final cleanup: real errors close both ends, the first error is preserved, sockets are cleaned up once, and completion runs once after both copies finish.
+
+The error-injection test also exposed an existing sing v0.8.14 behavior: a first write error can become `nil` when the original source has no handshake-failure reporter. A small source adapter inside ConnectionManager preserves that error and delegates any existing protocol reporter. It unwraps transparently for reads and counters. This fix is confined to the manager's TCP copy; Patch 6 and sing's UDP copy behavior are unchanged.
+
+Patch 8 adds serialized write-side state to `shadowaead.clientConn`. Initial handshake, `Write`, `WriteBuffer`, `NeedHandshake`, and `CloseWrite` use the same write lock. When necessary, `CloseWrite` completes the existing internal target-header handshake before sending FIN. Completed encrypted writes precede FIN; repeated closes retain their original result, writes after closure fail, and a failed encrypted write cannot restart the handshake. Unsupported or failed half-close returns an error. The response reader remains available. The AEAD connection is never declared writer-replaceable, and no asynchronous queue or empty-write flush is added.
+
+The regressions use real loopback TCP connections and AES-GCM Shadowsocks records. The manager fixture exercises `CounterConn`, `ExtendedConn`, `CachedConn`, SS2 `clientConn`, `trackedConn`, and TCP sockets. Its server independently decodes SIP004 records and checks the complete target address, port and plaintext. It covers upload-first and download-first EOF, delayed reverse data, tracking lifetime, exact counters, original read/write/half-close errors, existing handshake reporters and truncated encrypted responses. SS2 tests additionally cover zero payload, early and completed handshakes, repeated writes, `WriteBuffer`, concurrent writes/FIN, repeated close, unsupported close and failed header/payload/FIN. All socket and completion waits are bounded.
+
+The build script applies the same fixture to the six-patch baseline before enabling Patches 7–8. The baseline must demonstrate both premature tracking removal and loss of the reverse tail; an unrelated test failure or an unexpectedly passing baseline stops the build. These are TCP/SS core integration checks, not macOS TUN, Helper, installed-application or real Codex acceptance tests. No Codex client, routing, DNS, IPv6, keepalive, NAT timeout or Outline-server setting changes are included. This stage does not claim to resolve every Reconnecting error.
+
+Stage-one validation on 2026-11-06 used Go 1.25.3 and the existing Xcode toolchain:
+
+- The same upload-first fixture delivered 45,000 upstream bytes in both versions. The six-patch baseline removed tracking early and returned 0 of the required 60,000 downstream bytes. The patched version returned all 60,000 bytes; the download-first EOF case also retained the complete upload.
+- All six new test groups (18 leaf scenarios) passed, including the race detector. Existing route/rule, route, Shadowsocks UDP DOMAIN, traffic-accounting, and sing `TestUDPMessageTooLong` regressions passed with the standard build tags.
+- The final script built sing-box 1.13.21 for darwin/arm64 with CGO; its dependency record confirms sing v0.8.14, sing-tun v0.8.15 and private SS2 v0.2.1. Binary checks found both new half-close/completion implementations. A second invocation with the same source directory was rejected before downloads or patching.
+- The isolated unsigned project validation passed all 223 existing Swift tests with no failures or skips, including candidate-kernel configuration checks. The existing `build.sh` and `open.sh` were not run.
+
+The reproducible build and comparison logs are in `.build/tcp-half-close-20261106/verified/`; the candidate is `sing-box-1.13.21` in that directory. The isolated Swift result is `.build/tcp-half-close-20261106/swift-summary.json`. The project embeds the validated candidate as `bin/sing-box`; the previous six-patch kernel is preserved as `bin/sing-box-1.13.21-before-tcp-half-close`, with an additional pre-change copy in `.build/tcp-half-close-20261106/backup/`. Installed applications, login extensions/helpers and running components are left for the manual update workflow.
+
 ### Reproduce the patched binary
 
 From the SeparateProxy repository root, run:
@@ -991,7 +1020,7 @@ kernel_work=$(mktemp -d /private/tmp/separateproxy-kernel.XXXXXX)
 ./build-sing-box.sh "$kernel_work"
 ```
 
-The script downloads sing-box and sing at their fixed commits, applies Patches 1–5 to sing-box and Patch 6 to its private sing v0.8.14 copy with zero fuzz, builds `darwin/arm64` with CGO and the upstream `release/DEFAULT_BUILD_TAGS` and `release/LDFLAGS`, then runs the Go patch tests. It uses the installed Go toolchain, refuses to reuse an existing source directory, disables VCS stamping, and leaves `bin/sing-box` untouched. Go modules and compilation caches default to `/private/tmp/separateproxy-go-mod-cache` and `/private/tmp/separateproxy-go-build-cache`; normal Go environment overrides remain available.
+The script downloads sing-box, sing and SS2 at their fixed commits. It preserves Patches 1–5 in their original order, applies Patch 6 to its private sing v0.8.14 copy, then adds Patch 7 to sing-box and Patch 8 to private SS2 v0.2.1 with zero fuzz. It verifies both local module replacements, runs the baseline/patched half-close comparison, builds `darwin/arm64` with CGO and the upstream build tags/flags, runs the related Go regressions, and checks that the binary includes the new SS2 half-close and manager completion methods. It writes `half-close-baseline.log`, `half-close-patched.log` and `half-close-dependencies.txt` in the work directory. Existing source directories cause a clear refusal; rerun with a fresh work directory. It disables VCS stamping and leaves `bin/sing-box` untouched. Go modules and compilation caches default to `/private/tmp/separateproxy-go-mod-cache` and `/private/tmp/separateproxy-go-build-cache`; normal Go environment overrides remain available. Module-cache source files are never patched.
 
 Before replacing the project binary, run the existing Swift tests and app build in a temporary project copy containing the candidate kernel:
 
@@ -1011,22 +1040,22 @@ xcodebuild \
 
 The existing tests generate synthetic configurations for all seven target classes and invoke `sing-box check`; they do not start TUN or contact the Outline server. Unsigned validation does not install or launch SeparateProxy or register its helper. Building an installable signed app afterward still requires the existing local signing configuration.
 
-Only after the kernel build, Go tests, Swift configuration tests, and app build succeed, preserve the original three-patch 1.13.21 binary and replace the project binary. Keep the earlier 1.13.19 backup intact:
+Only after the kernel build, Go tests and isolated project checks succeed, preserve the current six-patch 1.13.21 binary before replacing the project binary. Keep the earlier backups intact:
 
 ```bash
 # Keep this backup intact on subsequent builds.
-cp -pn bin/sing-box bin/sing-box-1.13.21-original
+cp -pn bin/sing-box bin/sing-box-1.13.21-before-tcp-half-close
 cp "$kernel_work/sing-box-1.13.21" bin/sing-box
 chmod 755 bin/sing-box
 ```
 
-To restore the preserved three-patch 1.13.21 kernel:
+To restore the preserved six-patch kernel:
 
 ```bash
-cp -p bin/sing-box-1.13.21-original bin/sing-box
+cp -p bin/sing-box-1.13.21-before-tcp-half-close bin/sing-box
 ```
 
-The backup is a directly executable copy of the original private binary. Kernel rollback must use the original App/Helper and configuration generator together: the original kernel does not support `udp_domain_nat`. Preserve the old installed `.app` before a manual update; restoring that complete bundle also restores its matching Helper and kernel. For a source rollback, restore the pre-change Core/configuration source along with the binary. The Xcode project embeds only `bin/sing-box`; backups are not bundled. Rebuild and install the app through the existing workflow when choosing either kernel. Do not overwrite Homebrew or Cellar, operate a running SeparateProxy instance, or change system network settings during build validation. ChatGPT and Codex connection stability remains a user acceptance check after installation.
+The half-close backup is a directly executable six-patch binary and supports the same configuration as the new kernel. Stage-one rollback does not require a routing/configuration change. The older `sing-box-1.13.21-original` backup contains only the first three patches and lacks `udp_domain_nat`; it is not the rollback target for this stage. Preserve the old installed `.app` before a manual update; restoring that complete bundle also restores its matching Helper and kernel. The Xcode project embeds only `bin/sing-box`; backups are not bundled. Build/open the app and replace the matching login extension/helper through the existing manual workflow. Do not operate a running instance or change system network settings during build validation. Real TUN and consecutive Codex model/tool continuation remain installation-time user acceptance checks.
 
 ## Troubleshooting and engineering postmortem
 
@@ -1399,7 +1428,7 @@ Every new workaround requires a specific symptom, evidence, and narrow target sc
 - UI may show stale `Running` after unexpected sing-box exit until refresh.
 - Abnormal exit can leave root-owned runtime config, PID, and logs.
 - Helper identifier changes require explicit old-registration cleanup.
-- Reproduction uses `build-sing-box.sh` and three ready-to-apply patch files. Patch 3 retains its original 1.13.19 filename and applies unchanged to 1.13.21; the upstream sing-box source tree is not vendored.
+- Reproduction uses `build-sing-box.sh` and eight ready-to-apply patch files across sing-box, sing and SS2. Patch 3 retains its original 1.13.19 filename and applies unchanged to 1.13.21; the upstream dependency source trees are not vendored.
 
 ## Repository privacy
 

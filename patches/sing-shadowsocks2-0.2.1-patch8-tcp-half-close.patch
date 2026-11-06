@@ -1,0 +1,484 @@
+--- a/shadowaead/method.go
++++ b/shadowaead/method.go
+@@ -4,7 +4,9 @@
+ 	"context"
+ 	"crypto/aes"
+ 	"crypto/cipher"
++	"errors"
+ 	"net"
++	"sync"
+ 
+ 	C "github.com/sagernet/sing-shadowsocks2/cipher"
+ 	"github.com/sagernet/sing-shadowsocks2/internal/legacykey"
+@@ -116,6 +118,9 @@
+ 	reader          *shadowio.Reader
+ 	readWaitOptions N.ReadWaitOptions
+ 	writer          *shadowio.Writer
++	writeAccess     sync.Mutex
++	writeClosed     bool
++	writeCloseErr   error
+ 	shadowio.WriterInterface
+ }
+ 
+@@ -190,6 +195,17 @@
+ }
+ 
+ func (c *clientConn) Write(p []byte) (n int, err error) {
++	c.writeAccess.Lock()
++	defer c.writeAccess.Unlock()
++	if c.writeClosed {
++		return 0, net.ErrClosed
++	}
++	defer func() {
++		if err != nil {
++			c.writeClosed = true
++			c.writeCloseErr = err
++		}
++	}()
+ 	if c.writer == nil {
+ 		err = c.writeRequest(p)
+ 		if err == nil {
+@@ -200,7 +216,19 @@
+ 	return c.writer.Write(p)
+ }
+ 
+-func (c *clientConn) WriteBuffer(buffer *buf.Buffer) error {
++func (c *clientConn) WriteBuffer(buffer *buf.Buffer) (err error) {
++	c.writeAccess.Lock()
++	defer c.writeAccess.Unlock()
++	if c.writeClosed {
++		buffer.Release()
++		return net.ErrClosed
++	}
++	defer func() {
++		if err != nil {
++			c.writeClosed = true
++			c.writeCloseErr = err
++		}
++	}()
+ 	if c.writer == nil {
+ 		defer buffer.Release()
+ 		return c.writeRequest(buffer.Bytes())
+@@ -209,7 +237,36 @@
+ }
+ 
+ func (c *clientConn) NeedHandshake() bool {
+-	return c.writer == nil
++	c.writeAccess.Lock()
++	defer c.writeAccess.Unlock()
++	return c.writer == nil && !c.writeClosed
++}
++
++// CloseWrite serializes FIN with every encrypted write, including the initial
++// target header. It leaves the response reader and the tracked connection alive.
++func (c *clientConn) CloseWrite() error {
++	c.writeAccess.Lock()
++	defer c.writeAccess.Unlock()
++	if c.writeClosed {
++		return c.writeCloseErr
++	}
++	c.writeClosed = true
++	writer, _ := N.UnwrapCountWriter(c.Conn, nil)
++	duplex, ok := N.UnwrapWriter(writer).(N.WriteCloser)
++	if !ok {
++		c.writeCloseErr = errors.ErrUnsupported
++		return c.writeCloseErr
++	}
++	if c.writer == nil {
++		// This is the existing AEAD target-header handshake, not an empty-write
++		// flush. Its buffered header is fully written before the TCP FIN.
++		if err := c.writeRequest(nil); err != nil {
++			c.writeCloseErr = err
++			return err
++		}
++	}
++	c.writeCloseErr = duplex.CloseWrite()
++	return c.writeCloseErr
+ }
+ 
+ func (c *clientConn) Upstream() any {
+--- /dev/null
++++ b/shadowaead/method_half_close_test.go
+@@ -0,0 +1,382 @@
++package shadowaead
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	C "github.com/sagernet/sing-shadowsocks2/cipher"
++	"github.com/sagernet/sing-shadowsocks2/internal/legacykey"
++	"github.com/sagernet/sing-shadowsocks2/internal/shadowio"
++	"github.com/sagernet/sing/common/buf"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func halfCloseTCPPair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
++	t.Helper()
++	l, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer l.Close()
++	a, err := net.DialTCP("tcp4", nil, l.Addr().(*net.TCPAddr))
++	if err != nil {
++		t.Fatal(err)
++	}
++	b, err := l.AcceptTCP()
++	if err != nil {
++		a.Close()
++		t.Fatal(err)
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	a.SetDeadline(deadline)
++	b.SetDeadline(deadline)
++	t.Cleanup(func() { a.Close(); b.Close() })
++	return a, b
++}
++
++func halfCloseMethod(t *testing.T) *Method {
++	t.Helper()
++	m, err := NewMethod(context.Background(), "aes-128-gcm", C.MethodOptions{Key: []byte("0123456789abcdef")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return m
++}
++
++func halfCloseBuffer(data []byte) *buf.Buffer {
++	head := shadowio.PacketLengthBufferSize + shadowio.Overhead
++	b := buf.NewSize(head + len(data) + shadowio.Overhead)
++	b.Resize(head, 0)
++	b.Write(data)
++	return b
++}
++
++func halfCloseReader(m *Method, conn net.Conn) (io.Reader, error) {
++	salt := make([]byte, m.keySaltLength)
++	if _, err := io.ReadFull(conn, salt); err != nil {
++		return nil, err
++	}
++	key := make([]byte, m.keySaltLength)
++	legacykey.Kdf(m.key, salt, key)
++	aead, err := m.constructor(key)
++	if err != nil {
++		return nil, err
++	}
++	return shadowio.NewReader(conn, aead), nil
++}
++
++func halfCloseReply(m *Method, conn net.Conn, payload []byte) error {
++	salt := bytes.Repeat([]byte{0x71}, m.keySaltLength)
++	key := make([]byte, m.keySaltLength)
++	legacykey.Kdf(m.key, salt, key)
++	aead, err := m.constructor(key)
++	if err != nil {
++		return err
++	}
++	if _, err = conn.Write(salt); err != nil {
++		return err
++	}
++	_, err = shadowio.NewWriter(conn, aead, nil, MaxPacketSize).Write(payload)
++	return err
++}
++
++func awaitHalfClose[T any](t *testing.T, ch <-chan T) T {
++	t.Helper()
++	select {
++	case value := <-ch:
++		return value
++	case <-time.After(6 * time.Second):
++		t.Fatal("half-close fixture did not finish")
++	}
++	var zero T
++	return zero
++}
++
++func TestClientConnHalfCloseAEAD(t *testing.T) {
++	for _, mode := range []string{"early-zero", "dial-zero", "writes", "buffers", "mixed"} {
++		t.Run(mode, func(t *testing.T) {
++			client, server := halfCloseTCPPair(t)
++			m := halfCloseMethod(t)
++			destination := M.Socksaddr{Fqdn: "half-close.test", Port: 443}
++			reply := bytes.Repeat([]byte("delayed encrypted reply"), 2048)
++			type result struct {
++				destination M.Socksaddr
++				payload     []byte
++				err         error
++			}
++			received := make(chan result, 1)
++			release := make(chan struct{})
++			done := make(chan error, 1)
++			go func() {
++				r, err := halfCloseReader(m, server)
++				var target M.Socksaddr
++				var payload []byte
++				if err == nil {
++					target, err = M.SocksaddrSerializer.ReadAddrPort(r)
++				}
++				if err == nil {
++					payload, err = io.ReadAll(r)
++				}
++				received <- result{target, payload, err}
++				select {
++				case <-release:
++				case <-time.After(5 * time.Second):
++					done <- errors.New("reply release timeout")
++					return
++				}
++				if err == nil {
++					err = halfCloseReply(m, server, reply)
++				}
++				if err == nil {
++					err = server.CloseWrite()
++				}
++				done <- err
++			}()
++			var conn net.Conn
++			var err error
++			if mode == "dial-zero" {
++				conn, err = m.DialConn(client, destination)
++			} else {
++				conn = m.DialEarlyConn(client, destination)
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++			var want []byte
++			if mode == "writes" || mode == "buffers" || mode == "mixed" {
++				for i := 0; i < 4; i++ {
++					data := bytes.Repeat([]byte{byte('a' + i)}, 20000+i)
++					if mode == "buffers" || (mode == "mixed" && i%2 == 1) {
++						err = conn.(N.ExtendedWriter).WriteBuffer(halfCloseBuffer(data))
++					} else {
++						var n int
++						n, err = conn.Write(data)
++						if n != len(data) && err == nil {
++							err = io.ErrShortWrite
++						}
++					}
++					if err != nil {
++						t.Fatal(err)
++					}
++					want = append(want, data...)
++				}
++			}
++			cw, ok := conn.(N.WriteCloser)
++			if !ok {
++				t.Fatal("Shadowsocks client does not expose CloseWrite")
++			}
++			if err := cw.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			if err := cw.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			if conn.(*clientConn).NeedHandshake() {
++				t.Fatal("half-close restarted the handshake")
++			}
++			if _, err := conn.Write([]byte("after FIN")); !errors.Is(err, net.ErrClosed) {
++				t.Fatalf("post-FIN Write: %v", err)
++			}
++			if err := conn.(N.ExtendedWriter).WriteBuffer(buf.As([]byte("after FIN"))); !errors.Is(err, net.ErrClosed) {
++				t.Fatalf("post-FIN WriteBuffer: %v", err)
++			}
++			got := awaitHalfClose(t, received)
++			close(release)
++			if got.err != nil {
++				t.Fatal(got.err)
++			}
++			if got.destination != destination || !bytes.Equal(got.payload, want) {
++				t.Fatalf("decrypted target/payload mismatch: target=%v bytes=%d want=%d", got.destination, len(got.payload), len(want))
++			}
++			data, err := io.ReadAll(conn)
++			if err != nil || !bytes.Equal(data, reply) {
++				t.Fatalf("reverse data after FIN: bytes=%d err=%v", len(data), err)
++			}
++			if err := awaitHalfClose(t, done); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++type halfCloseObservedConn struct {
++	net.Conn
++	entered  chan struct{}
++	release  chan struct{}
++	gate     sync.Once
++	fin      atomic.Int32
++	writeErr error
++	finErr   error
++}
++
++func (c *halfCloseObservedConn) Write(p []byte) (int, error) {
++	if c.entered != nil {
++		c.gate.Do(func() { close(c.entered); <-c.release })
++	}
++	if c.writeErr != nil {
++		return 0, c.writeErr
++	}
++	return c.Conn.Write(p)
++}
++
++func (c *halfCloseObservedConn) CloseWrite() error {
++	c.fin.Add(1)
++	if c.finErr != nil {
++		return c.finErr
++	}
++	return c.Conn.(*net.TCPConn).CloseWrite()
++}
++
++func TestClientConnHalfCloseConcurrentWrites(t *testing.T) {
++	client, server := halfCloseTCPPair(t)
++	m := halfCloseMethod(t)
++	observed := &halfCloseObservedConn{Conn: client, entered: make(chan struct{}), release: make(chan struct{})}
++	conn := m.DialEarlyConn(observed, M.Socksaddr{Fqdn: "concurrent.test", Port: 443}).(*clientConn)
++	result := make(chan []byte, 1)
++	serverErr := make(chan error, 1)
++	go func() {
++		r, err := halfCloseReader(m, server)
++		if err == nil {
++			_, err = M.SocksaddrSerializer.ReadAddrPort(r)
++		}
++		var body []byte
++		if err == nil {
++			body, err = io.ReadAll(r)
++		}
++		result <- body
++		serverErr <- err
++	}()
++	const size = 257
++	type writeResult struct {
++		id  byte
++		err error
++	}
++	writes := make(chan writeResult, 33)
++	go func() { _, err := conn.Write(bytes.Repeat([]byte{0}, size)); writes <- writeResult{0, err} }()
++	awaitHalfClose(t, observed.entered)
++	var wg sync.WaitGroup
++	for i := 1; i <= 32; i++ {
++		wg.Add(1)
++		go func(id byte) {
++			defer wg.Done()
++			data := bytes.Repeat([]byte{id}, size)
++			var err error
++			if id%2 == 0 {
++				err = conn.WriteBuffer(halfCloseBuffer(data))
++			} else {
++				_, err = conn.Write(data)
++			}
++			writes <- writeResult{id, err}
++		}(byte(i))
++	}
++	closed := make(chan error, 1)
++	go func() { closed <- conn.CloseWrite() }()
++	close(observed.release)
++	wg.Wait()
++	if err := awaitHalfClose(t, closed); err != nil {
++		t.Fatal(err)
++	}
++	for i := 0; i < 8; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if err := conn.CloseWrite(); err != nil {
++				t.Error(err)
++			}
++			conn.NeedHandshake()
++		}()
++	}
++	wg.Wait()
++	accepted := make(map[byte]int)
++	for i := 0; i < 33; i++ {
++		r := awaitHalfClose(t, writes)
++		if r.err == nil {
++			accepted[r.id]++
++		} else if !errors.Is(r.err, net.ErrClosed) {
++			t.Fatal(r.err)
++		}
++	}
++	body := awaitHalfClose(t, result)
++	if err := awaitHalfClose(t, serverErr); err != nil {
++		t.Fatal(err)
++	}
++	if len(body) != len(accepted)*size {
++		t.Fatalf("lost/reordered concurrent records: bytes=%d accepted=%d", len(body), len(accepted))
++	}
++	for offset := 0; offset < len(body); offset += size {
++		block := body[offset : offset+size]
++		id := block[0]
++		if accepted[id] != 1 || !bytes.Equal(block, bytes.Repeat([]byte{id}, size)) {
++			t.Fatal("concurrent write was interleaved or duplicated")
++		}
++		delete(accepted, id)
++	}
++	if len(accepted) != 0 || observed.fin.Load() != 1 {
++		t.Fatal("missing write or repeated FIN")
++	}
++}
++
++func TestClientConnHalfCloseFailures(t *testing.T) {
++	t.Run("unsupported", func(t *testing.T) {
++		a, b := net.Pipe()
++		defer a.Close()
++		defer b.Close()
++		conn := halfCloseMethod(t).DialEarlyConn(a, M.Socksaddr{Fqdn: "unsupported.test", Port: 443}).(*clientConn)
++		for i := 0; i < 2; i++ {
++			if err := conn.CloseWrite(); !errors.Is(err, errors.ErrUnsupported) {
++				t.Fatalf("unsupported half-close: %v", err)
++			}
++		}
++	})
++	for _, mode := range []string{"header-write", "payload-write", "buffer-write", "fin"} {
++		t.Run(mode, func(t *testing.T) {
++			a, _ := halfCloseTCPPair(t)
++			failure := errors.New("injected " + mode)
++			observed := &halfCloseObservedConn{Conn: a}
++			conn := halfCloseMethod(t).DialEarlyConn(observed, M.Socksaddr{Fqdn: "failure.test", Port: 443}).(*clientConn)
++			if mode != "header-write" {
++				if _, err := conn.Write([]byte("first")); err != nil {
++					t.Fatal(err)
++				}
++			}
++			if mode == "fin" {
++				observed.finErr = failure
++			} else {
++				observed.writeErr = failure
++			}
++			if mode == "payload-write" {
++				if _, err := conn.Write([]byte("next")); !errors.Is(err, failure) {
++					t.Fatal(err)
++				}
++			}
++			if mode == "buffer-write" {
++				if err := conn.WriteBuffer(halfCloseBuffer([]byte("next"))); !errors.Is(err, failure) {
++					t.Fatal(err)
++				}
++			}
++			for i := 0; i < 2; i++ {
++				if err := conn.CloseWrite(); !errors.Is(err, failure) {
++					t.Fatalf("original failure lost: %v", err)
++				}
++			}
++			wantFIN := int32(0)
++			if mode == "fin" {
++				wantFIN = 1
++			}
++			if observed.fin.Load() != wantFIN {
++				t.Fatal("FIN repeated or emitted after failed encrypted write")
++			}
++			if _, err := conn.Write([]byte("after failure")); !errors.Is(err, net.ErrClosed) {
++				t.Fatal(err)
++			}
++		})
++	}
++}

@@ -1,0 +1,516 @@
+--- a/route/conn.go
++++ b/route/conn.go
+@@ -137,8 +137,9 @@
+ 	if m.kickWriteHandshake(ctx, remoteConn, conn, serverFirst, true, &done, onClose) {
+ 		return
+ 	}
+-	go m.connectionCopy(ctx, conn, remoteConn, false, &done, onClose)
+-	go m.connectionCopy(ctx, remoteConn, conn, true, &done, onClose)
++	var copyState tcpCopyState
++	go m.connectionCopy(ctx, conn, remoteConn, false, &copyState, onClose)
++	go m.connectionCopy(ctx, remoteConn, conn, true, &copyState, onClose)
+ }
+ 
+ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dialer, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+@@ -258,24 +259,59 @@
+ 	go m.packetConnectionCopy(ctx, destination, conn, true, &done, onClose)
+ }
+ 
+-func (m *ConnectionManager) connectionCopy(ctx context.Context, source net.Conn, destination net.Conn, direction bool, done *atomic.Bool, onClose N.CloseHandlerFunc) {
+-	_, err := bufio.CopyWithIncreateBuffer(destination, source, bufio.DefaultIncreaseBufferAfter, bufio.DefaultBatchSize)
+-	if err != nil {
+-		common.Close(source, destination)
+-	} else if duplexDst, isDuplex := destination.(N.WriteCloser); isDuplex {
+-		err = duplexDst.CloseWrite()
+-		if err != nil {
+-			common.Close(source, destination)
+-		}
+-	} else {
+-		destination.Close()
+-	}
+-	if done.Swap(true) {
+-		if onClose != nil {
+-			onClose(err)
+-		}
+-		common.Close(source, destination)
+-	}
++// The two TCP copy directions share final cleanup, while each successful EOF
++// closes only its destination's write side. Record the original error before
++// closing sockets wakes the opposite copy with a secondary closed error.
++type tcpCopyState struct {
++	access    sync.Mutex
++	completed int
++	err       error
++	closeOnce sync.Once
++}
++
++func (s *tcpCopyState) finish(err error, fullClose bool, source, destination net.Conn, onClose N.CloseHandlerFunc) {
++	s.access.Lock()
++	if s.err == nil && err != nil {
++		s.err = err
++	}
++	s.completed++
++	last := s.completed == 2
++	result := s.err
++	s.access.Unlock()
++	if err != nil || fullClose || last {
++		s.closeOnce.Do(func() { common.Close(source, destination) })
++	}
++	if last && onClose != nil {
++		onClose(result)
++	}
++}
++
++// sing v0.8.14 reports the first write failure through originSource and can
++// otherwise turn it into nil. Keep that error while preserving any real
++// protocol handshake reporter. Data and counters unwrap through this adapter.
++type tcpCopySource struct{ net.Conn }
++
++func (c *tcpCopySource) Upstream() any           { return c.Conn }
++func (c *tcpCopySource) ReaderReplaceable() bool { return true }
++func (c *tcpCopySource) HandshakeFailure(err error) error {
++	if reporter, ok := common.Cast[N.HandshakeFailure](c.Conn); ok {
++		return reporter.HandshakeFailure(err)
++	}
++	return nil
++}
++
++func (m *ConnectionManager) connectionCopy(ctx context.Context, source net.Conn, destination net.Conn, direction bool, state *tcpCopyState, onClose N.CloseHandlerFunc) {
++	_, err := bufio.CopyWithIncreateBuffer(destination, &tcpCopySource{source}, bufio.DefaultIncreaseBufferAfter, bufio.DefaultBatchSize)
++	var fullClose bool
++	if err == nil {
++		destinationWriter, _ := N.UnwrapCountWriter(destination, nil)
++		if duplexDst, ok := N.UnwrapWriter(destinationWriter).(N.WriteCloser); ok {
++			err = duplexDst.CloseWrite()
++		} else {
++			fullClose = true
++		}
++	}
++	state.finish(err, fullClose, source, destination, onClose)
+ 	if !direction {
+ 		if err == nil {
+ 			m.logger.DebugContext(ctx, "connection upload finished")
+--- /dev/null
++++ b/route/conn_half_close_test.go
+@@ -0,0 +1,421 @@
++package route
++
++import (
++	"bytes"
++	"context"
++	"crypto/aes"
++	"crypto/cipher"
++	"crypto/sha1"
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/log"
++	SSC "github.com/sagernet/sing-shadowsocks2/cipher"
++	"github.com/sagernet/sing-shadowsocks2/shadowaead"
++	"github.com/sagernet/sing/common/buf"
++	"github.com/sagernet/sing/common/bufio"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++	"golang.org/x/crypto/hkdf"
++)
++
++func tcpHalfClosePair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
++	t.Helper()
++	l, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer l.Close()
++	a, err := net.DialTCP("tcp4", nil, l.Addr().(*net.TCPAddr))
++	if err != nil {
++		t.Fatal(err)
++	}
++	b, err := l.AcceptTCP()
++	if err != nil {
++		a.Close()
++		t.Fatal(err)
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	a.SetDeadline(deadline)
++	b.SetDeadline(deadline)
++	t.Cleanup(func() { a.Close(); b.Close() })
++	return a, b
++}
++
++func tcpHalfCloseAwait[T any](t *testing.T, ch <-chan T) T {
++	t.Helper()
++	select {
++	case value := <-ch:
++		return value
++	case <-time.After(6 * time.Second):
++		t.Fatal("TCP half-close fixture timed out")
++	}
++	var zero T
++	return zero
++}
++
++// Independent SIP004 fixture decoder: real AES-GCM records, HKDF-SHA1,
++// encrypted lengths and little-endian nonces. It does not call clientConn.
++type tcpHalfCloseDecoder struct {
++	conn  io.Reader
++	aead  cipher.AEAD
++	nonce []byte
++	plain []byte
++}
++
++func tcpHalfCloseAEAD(salt []byte) (cipher.AEAD, error) {
++	key := make([]byte, 16)
++	if _, err := io.ReadFull(hkdf.New(sha1.New, []byte("0123456789abcdef"), salt, []byte("ss-subkey")), key); err != nil {
++		return nil, err
++	}
++	block, err := aes.NewCipher(key)
++	if err != nil {
++		return nil, err
++	}
++	return cipher.NewGCM(block)
++}
++
++func tcpHalfCloseNonce(n []byte) {
++	for i := range n {
++		n[i]++
++		if n[i] != 0 {
++			break
++		}
++	}
++}
++
++func tcpHalfCloseDecode(conn io.Reader) (*tcpHalfCloseDecoder, error) {
++	salt := make([]byte, 16)
++	if _, err := io.ReadFull(conn, salt); err != nil {
++		return nil, err
++	}
++	aead, err := tcpHalfCloseAEAD(salt)
++	if err != nil {
++		return nil, err
++	}
++	return &tcpHalfCloseDecoder{conn: conn, aead: aead, nonce: make([]byte, aead.NonceSize())}, nil
++}
++
++func (r *tcpHalfCloseDecoder) Read(p []byte) (int, error) {
++	if len(p) == 0 {
++		return 0, nil
++	}
++	for len(r.plain) == 0 {
++		header := make([]byte, 2+r.aead.Overhead())
++		if _, err := io.ReadFull(r.conn, header); err != nil {
++			return 0, err
++		}
++		length, err := r.aead.Open(nil, r.nonce, header, nil)
++		if err != nil {
++			return 0, err
++		}
++		tcpHalfCloseNonce(r.nonce)
++		n := int(binary.BigEndian.Uint16(length))
++		if n > 0x3fff {
++			return 0, errors.New("invalid SS record length")
++		}
++		body := make([]byte, n+r.aead.Overhead())
++		if _, err = io.ReadFull(r.conn, body); err != nil {
++			return 0, err
++		}
++		r.plain, err = r.aead.Open(nil, r.nonce, body, nil)
++		if err != nil {
++			return 0, err
++		}
++		tcpHalfCloseNonce(r.nonce)
++	}
++	n := copy(p, r.plain)
++	r.plain = r.plain[n:]
++	return n, nil
++}
++
++func tcpHalfCloseEncode(conn io.Writer, data []byte) error {
++	salt := bytes.Repeat([]byte{0x63}, 16)
++	aead, err := tcpHalfCloseAEAD(salt)
++	if err != nil {
++		return err
++	}
++	if _, err = conn.Write(salt); err != nil {
++		return err
++	}
++	nonce := make([]byte, aead.NonceSize())
++	for len(data) > 0 {
++		n := min(len(data), 0x3fff)
++		length := []byte{byte(n >> 8), byte(n)}
++		packet := aead.Seal(nil, nonce, length, nil)
++		tcpHalfCloseNonce(nonce)
++		packet = append(packet, aead.Seal(nil, nonce, data[:n], nil)...)
++		tcpHalfCloseNonce(nonce)
++		if _, err = conn.Write(packet); err != nil {
++			return err
++		}
++		data = data[n:]
++	}
++	return nil
++}
++
++type tcpHalfCloseDialer struct{ dial func() (net.Conn, error) }
++
++func (d tcpHalfCloseDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
++	return d.dial()
++}
++func (d tcpHalfCloseDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
++	return nil, errors.ErrUnsupported
++}
++
++func tcpHalfCloseCount(m *ConnectionManager) int {
++	m.access.Lock()
++	defer m.access.Unlock()
++	return m.Count()
++}
++
++func TestTCPHalfCloseBidirectional(t *testing.T) {
++	for _, direction := range []string{"upload-eof", "download-eof"} {
++		t.Run(direction, func(t *testing.T) {
++			app, inbound := tcpHalfClosePair(t)
++			outbound, server := tcpHalfClosePair(t)
++			manager := NewConnectionManager(log.NewNOPFactory().NewLogger("half-close"))
++			method, err := shadowaead.NewMethod(context.Background(), "aes-128-gcm", SSC.MethodOptions{Key: []byte("0123456789abcdef")})
++			if err != nil {
++				t.Fatal(err)
++			}
++			up := bytes.Repeat([]byte("client payload;"), 3000)
++			down := bytes.Repeat([]byte("server delayed tail;"), 3000)
++			prefix := append([]byte(nil), up[:37]...)
++			cached := bufio.NewCachedConn(inbound, buf.As(prefix))
++			var uploaded, downloaded atomic.Int64
++			counted := bufio.NewCounterConn(cached, []N.CountFunc{func(n int64) { uploaded.Add(n) }}, []N.CountFunc{func(n int64) { downloaded.Add(n) }})
++			target := M.Socksaddr{Fqdn: "half-close.test", Port: 443}
++			half := make(chan struct{}, 1)
++			release := make(chan struct{})
++			serverDone := make(chan error, 1)
++			go func() {
++				r, err := tcpHalfCloseDecode(server)
++				var destination M.Socksaddr
++				if err == nil {
++					destination, err = M.SocksaddrSerializer.ReadAddrPort(r)
++				}
++				if err == nil && destination != target {
++					err = fmt.Errorf("SS destination mismatch: %v", destination)
++				}
++				if err == nil && direction == "download-eof" {
++					err = tcpHalfCloseEncode(server, down)
++					if err == nil {
++						err = server.CloseWrite()
++					}
++				}
++				var body []byte
++				if err == nil {
++					body, err = io.ReadAll(r)
++				}
++				if err == nil && !bytes.Equal(body, up) {
++					err = fmt.Errorf("TCP half-close payload mismatch: upstream bytes=%d want=%d", len(body), len(up))
++				}
++				if direction == "upload-eof" {
++					half <- struct{}{}
++					select {
++					case <-release:
++					case <-time.After(5 * time.Second):
++						err = errors.New("reply gate timed out")
++					}
++					if err == nil {
++						err = tcpHalfCloseEncode(server, down)
++						if err == nil {
++							err = server.CloseWrite()
++						}
++					}
++				}
++				serverDone <- err
++			}()
++			var callbacks atomic.Int32
++			complete := make(chan error, 2)
++			dialer := tcpHalfCloseDialer{dial: func() (net.Conn, error) { return method.DialEarlyConn(manager.TrackConn(outbound), target), nil }}
++			manager.NewConnection(context.Background(), dialer, counted, adapter.InboundContext{Destination: target}, func(err error) { callbacks.Add(1); complete <- err })
++			if direction == "upload-eof" {
++				if _, err = app.Write(up[len(prefix):]); err != nil {
++					t.Fatal(err)
++				}
++				if err = app.CloseWrite(); err != nil {
++					t.Fatal(err)
++				}
++				tcpHalfCloseAwait(t, half)
++				if n := tcpHalfCloseCount(manager); n != 1 {
++					t.Errorf("tracked connection removed before reverse tail: %d", n)
++				}
++				if callbacks.Load() != 0 {
++					t.Error("callback ran before reverse copy ended")
++				}
++				close(release)
++			}
++			data, readErr := io.ReadAll(app)
++			if readErr != nil || !bytes.Equal(data, down) {
++				t.Errorf("TCP half-close payload mismatch: downstream bytes=%d want=%d error=%v", len(data), len(down), readErr)
++			}
++			if direction == "download-eof" {
++				if n := tcpHalfCloseCount(manager); n != 1 {
++					t.Errorf("tracked connection removed before remaining upload: %d", n)
++				}
++				if callbacks.Load() != 0 {
++					t.Error("callback ran before upload ended")
++				}
++				if _, err = app.Write(up[len(prefix):]); err != nil {
++					t.Error(err)
++				}
++				if err = app.CloseWrite(); err != nil {
++					t.Error(err)
++				}
++			}
++			if err = tcpHalfCloseAwait(t, serverDone); err != nil {
++				t.Error(err)
++			}
++			if err = tcpHalfCloseAwait(t, complete); err != nil {
++				t.Error(err)
++			}
++			if tcpHalfCloseCount(manager) != 0 || callbacks.Load() != 1 {
++				t.Fatal("tracking leak or repeated callback")
++			}
++			if uploaded.Load() != int64(len(up)) || downloaded.Load() != int64(len(down)) {
++				t.Fatalf("accounting mismatch: up=%d down=%d", uploaded.Load(), downloaded.Load())
++			}
++		})
++	}
++}
++
++type tcpHalfCloseFaultConn struct {
++	net.Conn
++	readErr, writeErr, finErr error
++	closes                    atomic.Int32
++}
++
++func (c *tcpHalfCloseFaultConn) Read(p []byte) (int, error) {
++	if c.readErr != nil {
++		return 0, c.readErr
++	}
++	return c.Conn.Read(p)
++}
++func (c *tcpHalfCloseFaultConn) Write(p []byte) (int, error) {
++	if c.writeErr != nil {
++		return 0, c.writeErr
++	}
++	return c.Conn.Write(p)
++}
++
++func (c *tcpHalfCloseFaultConn) WriteBuffer(buffer *buf.Buffer) error {
++	defer buffer.Release()
++	_, err := c.Write(buffer.Bytes())
++	return err
++}
++func (c *tcpHalfCloseFaultConn) CloseWrite() error {
++	if c.finErr != nil {
++		return c.finErr
++	}
++	return c.Conn.(*net.TCPConn).CloseWrite()
++}
++func (c *tcpHalfCloseFaultConn) Close() error { c.closes.Add(1); return c.Conn.Close() }
++
++type tcpHalfCloseReporter struct {
++	net.Conn
++	reports atomic.Int32
++}
++
++func (c *tcpHalfCloseReporter) HandshakeFailure(error) error {
++	c.reports.Add(1)
++	return nil
++}
++
++func TestTCPHalfCloseErrorCleanup(t *testing.T) {
++	for _, mode := range []string{"read", "write", "reported-write", "half-close"} {
++		t.Run(mode, func(t *testing.T) {
++			app, inbound := tcpHalfClosePair(t)
++			outbound, _ := tcpHalfClosePair(t)
++			failure := errors.New("injected TCP " + mode)
++			source := &tcpHalfCloseFaultConn{Conn: inbound}
++			destination := &tcpHalfCloseFaultConn{Conn: outbound}
++			switch mode {
++			case "read":
++				source.readErr = failure
++			case "write", "reported-write":
++				destination.writeErr = failure
++			case "half-close":
++				destination.finErr = failure
++			}
++			m := NewConnectionManager(log.NewNOPFactory().NewLogger("half-close"))
++			done := make(chan error, 2)
++			var callbacks atomic.Int32
++			d := tcpHalfCloseDialer{dial: func() (net.Conn, error) { return m.TrackConn(destination), nil }}
++			var origin net.Conn = source
++			reporter := &tcpHalfCloseReporter{Conn: source}
++			if mode == "reported-write" {
++				origin = reporter
++			}
++			m.NewConnection(context.Background(), d, bufio.NewCounterConn(origin, nil, nil), adapter.InboundContext{Destination: M.Socksaddr{Fqdn: "fault.test", Port: 443}}, func(err error) { callbacks.Add(1); done <- err })
++			if mode == "write" || mode == "reported-write" {
++				if _, err := app.Write([]byte("trigger write")); err != nil {
++					t.Fatal(err)
++				}
++				app.CloseWrite()
++			}
++			if mode == "half-close" {
++				app.CloseWrite()
++			}
++			if err := tcpHalfCloseAwait(t, done); !errors.Is(err, failure) {
++				t.Fatalf("original copy error lost: %v", err)
++			}
++			if m.Count() != 0 || callbacks.Load() != 1 || source.closes.Load() != 1 || destination.closes.Load() != 1 {
++				t.Fatalf("cleanup mismatch: tracked=%d callback=%d closes=%d/%d", m.Count(), callbacks.Load(), source.closes.Load(), destination.closes.Load())
++			}
++			if mode == "reported-write" && reporter.reports.Load() != 1 {
++				t.Fatal("existing handshake reporter was lost or repeated")
++			}
++		})
++	}
++}
++
++func TestTCPHalfCloseTruncatedShadowsocksResponse(t *testing.T) {
++	app, inbound := tcpHalfClosePair(t)
++	outbound, server := tcpHalfClosePair(t)
++	m := NewConnectionManager(log.NewNOPFactory().NewLogger("half-close"))
++	method, err := shadowaead.NewMethod(context.Background(), "aes-128-gcm", SSC.MethodOptions{Key: []byte("0123456789abcdef")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	target := M.Socksaddr{Fqdn: "truncated.test", Port: 443}
++	serverDone := make(chan error, 1)
++	go func() {
++		r, err := tcpHalfCloseDecode(server)
++		if err == nil {
++			_, err = M.SocksaddrSerializer.ReadAddrPort(r)
++		}
++		if err == nil {
++			_, err = server.Write([]byte{1, 2, 3})
++		}
++		if err == nil {
++			err = server.CloseWrite()
++		}
++		serverDone <- err
++	}()
++	done := make(chan error, 2)
++	var callbacks atomic.Int32
++	d := tcpHalfCloseDialer{dial: func() (net.Conn, error) { return method.DialEarlyConn(m.TrackConn(outbound), target), nil }}
++	m.NewConnection(context.Background(), d, bufio.NewCounterConn(inbound, nil, nil), adapter.InboundContext{Destination: target}, func(err error) { callbacks.Add(1); done <- err })
++	if err := tcpHalfCloseAwait(t, serverDone); err != nil {
++		t.Fatal(err)
++	}
++	if err := tcpHalfCloseAwait(t, done); !errors.Is(err, io.ErrUnexpectedEOF) {
++		t.Fatalf("truncated AEAD response error lost: %v", err)
++	}
++	if tcpHalfCloseCount(m) != 0 || callbacks.Load() != 1 {
++		t.Fatal("truncated response leaked a connection or repeated completion")
++	}
++	app.SetReadDeadline(time.Now().Add(time.Second))
++	if _, err := io.ReadAll(app); err != nil && !errors.Is(err, net.ErrClosed) {
++		t.Fatal(err)
++	}
++}
