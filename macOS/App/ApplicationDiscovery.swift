@@ -140,6 +140,71 @@ enum CodexTargetDiscovery {
     }
 }
 
+enum AntigravityTargetState: Equatable {
+    case installed(AntigravityInstallation)
+    case notInstalled
+    case incompleteInstallation(String)
+    case unsupportedInstallation(String)
+
+    var installation: AntigravityInstallation? {
+        guard case let .installed(installation) = self else { return nil }
+        return installation
+    }
+
+    var canSelect: Bool {
+        installation != nil
+    }
+
+    var label: String {
+        switch self {
+        case let .installed(installation):
+            return installation.backendState == .installed ? "Installed" : "Backend Pending"
+        case .notInstalled:
+            return "Not Installed"
+        case .incompleteInstallation:
+            return "Incomplete"
+        case .unsupportedInstallation:
+            return "Invalid"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case let .installed(installation):
+            switch installation.backendState {
+            case .installed:
+                return "Google VS Code extension \(installation.version) · agy installed"
+            case .pendingDownload:
+                return "Google VS Code extension \(installation.version) · agy downloads on first launch"
+            }
+        case .notInstalled:
+            return "The Google Antigravity VS Code extension is not installed."
+        case let .incompleteInstallation(reason), let .unsupportedInstallation(reason):
+            return reason
+        }
+    }
+}
+
+enum AntigravityTargetDiscovery {
+    static func discover() -> AntigravityTargetState {
+        let discovery = AntigravityExtensionDiscovery(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            expectedOwner: getuid()
+        )
+        do {
+            return .installed(try discovery.discoverActiveInstallation())
+        } catch AntigravityExtensionDiscoveryError.notInstalled {
+            return .notInstalled
+        } catch let AntigravityExtensionDiscoveryError.incompleteInstallation(reason) {
+            return .incompleteInstallation(reason)
+        } catch let AntigravityExtensionDiscoveryError.unsupportedInstallation(reason) {
+            return .unsupportedInstallation(reason)
+        } catch {
+            return .unsupportedInstallation(error.localizedDescription)
+        }
+    }
+}
+
 enum GitTargetState: Equatable {
     case installed(AppleGitInstallation)
     case notFound

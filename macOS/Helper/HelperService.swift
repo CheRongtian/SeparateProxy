@@ -33,6 +33,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
         accessKey: String,
         chromeBundlePath: String,
         codexEnabled: Bool,
+        antigravityEnabled: Bool,
         gitEnabled: Bool,
         dockerEnabled: Bool,
         kubernetesEnabled: Bool,
@@ -54,8 +55,15 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                         .forConsoleUser()
                         .discoverActiveInstallation()
                 }
+                let antigravityInstallation = try AntigravityExtensionDiscovery.resolveIfEnabled(
+                    antigravityEnabled
+                ) {
+                    try AntigravityExtensionDiscovery
+                        .forConsoleUser()
+                        .discoverActiveInstallation()
+                }
                 let vsCodePluginHelper = try VSCodePluginHelperValidator.resolveIfEnabled(
-                    codexEnabled
+                    codexEnabled || antigravityEnabled
                 ) {
                     try VSCodePluginHelperValidator().validateBundle(
                         atPath: vsCodeBundlePath
@@ -102,6 +110,7 @@ final class HelperService: NSObject, SeparateProxyHelperProtocol {
                     chromeBundlePath: validatedChromePath,
                     codexExecutablePath: codexInstallation?.executablePath,
                     vsCodePluginHelperExecutablePath: vsCodePluginHelper?.executablePath,
+                    antigravityExecutablePath: antigravityInstallation?.agyExecutablePath,
                     gitInstallation: gitInstallation,
                     dockerHubInstallation: dockerHubInstallation,
                     kubernetesInstallation: kubernetesEnabled

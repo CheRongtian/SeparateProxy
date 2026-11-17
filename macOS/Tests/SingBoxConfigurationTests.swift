@@ -628,9 +628,9 @@ final class SingBoxConfigurationTests: XCTestCase {
         let runtimeHostnames = Set(configuration.route.rules.flatMap { $0.domains ?? [] })
 
         XCTAssertEqual(customHostnames.count, 100)
-        XCTAssertEqual(effective.count, 115)
+        XCTAssertEqual(effective.count, 119)
         XCTAssertEqual(runtimeHostnames, Set(effective))
-        XCTAssertEqual(runtimeHostnames.count, 115)
+        XCTAssertEqual(runtimeHostnames.count, 119)
     }
 
     func testChatGPTRulesDisappearWhenTheirOnlyCustomHostnameIsRemoved() throws {
@@ -828,7 +828,7 @@ final class SingBoxConfigurationTests: XCTestCase {
             proxyWebsiteHostnames: effective
         )
 
-        XCTAssertEqual(configuration.route.rules.count, 1 + 3 + (11 * 2) + 1)
+        XCTAssertEqual(configuration.route.rules.count, 1 + 3 + (15 * 2) + 1)
         assertChromeIPv6CompatibilityRule(configuration.route.rules[0])
         assertChromeSniffRule(
             configuration.route.rules[1],

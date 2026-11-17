@@ -51,6 +51,7 @@ public enum TrafficAccountingReplyKey {
         accessKey: String,
         chromeBundlePath: String,
         codexEnabled: Bool,
+        antigravityEnabled: Bool,
         gitEnabled: Bool,
         dockerEnabled: Bool,
         kubernetesEnabled: Bool,

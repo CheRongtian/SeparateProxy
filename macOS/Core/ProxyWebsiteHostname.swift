@@ -55,9 +55,13 @@ public enum ChatGPTWebsiteRouting {
 }
 
 public enum GoogleWebsiteRouting {
-    // The first nine hosts cover core or entry workflows. The final two are
-    // narrowly scoped proactive compatibility candidates; runtime validation
-    // of the complete set remains pending.
+    public static let verifiedGeminiHostnames = [
+        "geminiweb-pa.clients6.google.com",
+        "www.gstatic.com",
+        "gemini.gstatic.com",
+        "waa-pa.clients6.google.com",
+    ]
+
     public static let hostnames = [
         "google.com",
         "www.google.com",
@@ -70,7 +74,19 @@ public enum GoogleWebsiteRouting {
         "gemini.google.com",
         "jnn-pa.googleapis.com",
         "www.googleapis.com",
-    ]
+    ] + verifiedGeminiHostnames
+
+    public static func migratePromotedGeminiHostnames(
+        customHostnames: [String],
+        isEnabled: Bool,
+        migrationCompleted: Bool
+    ) -> [String] {
+        guard isEnabled, !migrationCompleted else {
+            return customHostnames
+        }
+        let promotedHostnames = Set(verifiedGeminiHostnames)
+        return customHostnames.filter { !promotedHostnames.contains($0) }
+    }
 }
 
 public enum ChromeWebsiteRouting {

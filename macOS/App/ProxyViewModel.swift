@@ -16,6 +16,9 @@ final class ProxyViewModel: ObservableObject {
                 googleWebsiteRoutingIsEnabled,
                 forKey: Self.googleWebsiteRoutingSelectionKey
             )
+            if googleWebsiteRoutingIsEnabled {
+                migratePromotedGeminiCustomHostnamesIfNeeded()
+            }
             if state == .running {
                 message = "Google Website Routing changes will apply the next time the proxy starts."
             }
@@ -35,11 +38,16 @@ final class ProxyViewModel: ObservableObject {
     @Published var codexIsSelected: Bool {
         didSet {
             UserDefaults.standard.set(codexIsSelected, forKey: Self.codexSelectionKey)
-            if codexIsSelected {
-                vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()
-            } else {
-                vsCodeBundleURL = nil
-            }
+            refreshSelectedVSCodeBundle()
+        }
+    }
+    @Published var antigravityIsSelected: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                antigravityIsSelected,
+                forKey: Self.antigravitySelectionKey
+            )
+            refreshSelectedVSCodeBundle()
         }
     }
     @Published var gitIsSelected: Bool {
@@ -85,6 +93,7 @@ final class ProxyViewModel: ObservableObject {
     @Published private(set) var keyIsSaved = false
     @Published private(set) var chrome: DiscoveredApplication?
     @Published private(set) var codexTargetState: CodexTargetState = .notInstalled
+    @Published private(set) var antigravityTargetState: AntigravityTargetState = .notInstalled
     @Published private(set) var gitTargetState: GitTargetState = .notFound
     @Published private(set) var dockerHubTargetState: DockerHubTargetState = .notFound
     @Published private(set) var kubernetesTargetState: DockerBackendTargetState = .notFound
@@ -107,9 +116,11 @@ final class ProxyViewModel: ObservableObject {
 
     private static let chromeSelectionKey = "chrome-is-selected"
     private static let googleWebsiteRoutingSelectionKey = "google-website-routing-is-enabled"
+    private static let googleGeminiHostnameMigrationKey = "google-gemini-hostnames-migration-v1-completed"
     private static let chatGPTWebsiteRoutingSelectionKey = "chatgpt-website-routing-is-enabled"
     private static let chatGPTWebsiteRoutingMigrationKey = "chatgpt-website-routing-migration-v1-completed"
     private static let codexSelectionKey = "codex-is-selected"
+    private static let antigravitySelectionKey = "antigravity-is-selected"
     private static let gitSelectionKey = "git-is-selected"
     private static let dockerHubSelectionKey = "docker-is-selected"
     private static let kubernetesSelectionKey = "kubernetes-is-selected"
@@ -145,17 +156,29 @@ final class ProxyViewModel: ObservableObject {
             isEnabled: defaults.bool(forKey: Self.chatGPTWebsiteRoutingSelectionKey),
             migrationCompleted: chatGPTMigrationWasCompleted
         )
+        let storedGoogleWebsiteRoutingIsEnabled = defaults.bool(
+            forKey: Self.googleWebsiteRoutingSelectionKey
+        )
+        let googleGeminiMigrationWasCompleted = defaults.bool(
+            forKey: Self.googleGeminiHostnameMigrationKey
+        )
+        let migratedCustomHostnames = GoogleWebsiteRouting.migratePromotedGeminiHostnames(
+            customHostnames: chatGPTMigration.customHostnames,
+            isEnabled: storedGoogleWebsiteRoutingIsEnabled,
+            migrationCompleted: googleGeminiMigrationWasCompleted
+        )
 
         if UserDefaults.standard.object(forKey: Self.chromeSelectionKey) == nil {
             chromeIsSelected = true
         } else {
             chromeIsSelected = UserDefaults.standard.bool(forKey: Self.chromeSelectionKey)
         }
-        googleWebsiteRoutingIsEnabled = UserDefaults.standard.bool(
-            forKey: Self.googleWebsiteRoutingSelectionKey
-        )
+        googleWebsiteRoutingIsEnabled = storedGoogleWebsiteRoutingIsEnabled
         chatGPTWebsiteRoutingIsEnabled = chatGPTMigration.isEnabled
         codexIsSelected = UserDefaults.standard.bool(forKey: Self.codexSelectionKey)
+        antigravityIsSelected = UserDefaults.standard.bool(
+            forKey: Self.antigravitySelectionKey
+        )
         gitIsSelected = UserDefaults.standard.bool(forKey: Self.gitSelectionKey)
         dockerHubIsSelected = UserDefaults.standard.bool(forKey: Self.dockerHubSelectionKey)
         kubernetesIsSelected = UserDefaults.standard.bool(forKey: Self.kubernetesSelectionKey)
@@ -163,7 +186,7 @@ final class ProxyViewModel: ObservableObject {
             forKey: Self.containerRegistriesSelectionKey
         )
         homebrewIsSelected = UserDefaults.standard.bool(forKey: Self.homebrewSelectionKey)
-        proxyWebsiteHostnames = chatGPTMigration.customHostnames
+        proxyWebsiteHostnames = migratedCustomHostnames
         if !chatGPTMigrationWasCompleted {
             // Persist the built-in route before removing its legacy Custom
             // fallbacks, then mark completion only after both values are safe.
@@ -171,21 +194,47 @@ final class ProxyViewModel: ObservableObject {
                 chatGPTMigration.isEnabled,
                 forKey: Self.chatGPTWebsiteRoutingSelectionKey
             )
-            if chatGPTMigration.customHostnames != validatedStoredHostnames {
-                defaults.set(
-                    chatGPTMigration.customHostnames,
-                    forKey: Self.proxyWebsiteHostnamesKey
-                )
-            }
+        }
+        if migratedCustomHostnames != validatedStoredHostnames {
+            defaults.set(
+                migratedCustomHostnames,
+                forKey: Self.proxyWebsiteHostnamesKey
+            )
+        }
+        if !chatGPTMigrationWasCompleted {
             defaults.set(true, forKey: Self.chatGPTWebsiteRoutingMigrationKey)
         }
+        if storedGoogleWebsiteRoutingIsEnabled,
+           !googleGeminiMigrationWasCompleted {
+            defaults.set(true, forKey: Self.googleGeminiHostnameMigrationKey)
+        }
         refreshLocalState()
+    }
+
+    private func migratePromotedGeminiCustomHostnamesIfNeeded() {
+        let defaults = UserDefaults.standard
+        let migrationCompleted = defaults.bool(
+            forKey: Self.googleGeminiHostnameMigrationKey
+        )
+        let migratedHostnames = GoogleWebsiteRouting.migratePromotedGeminiHostnames(
+            customHostnames: proxyWebsiteHostnames,
+            isEnabled: googleWebsiteRoutingIsEnabled,
+            migrationCompleted: migrationCompleted
+        )
+        if migratedHostnames != proxyWebsiteHostnames {
+            proxyWebsiteHostnames = migratedHostnames
+            defaults.set(migratedHostnames, forKey: Self.proxyWebsiteHostnamesKey)
+        }
+        if !migrationCompleted {
+            defaults.set(true, forKey: Self.googleGeminiHostnameMigrationKey)
+        }
     }
 
     var canStart: Bool {
         let canRetry = state == .stopped || state == .error
         let hasSelection = chromeIsSelected
             || codexIsSelected
+            || antigravityIsSelected
             || gitIsSelected
             || dockerHubIsSelected
             || kubernetesIsSelected
@@ -193,6 +242,8 @@ final class ProxyViewModel: ObservableObject {
             || homebrewIsSelected
         let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
             && (!codexIsSelected || (codexTargetState.canSelect && vsCodeBundleURL != nil))
+            && (!antigravityIsSelected
+                || (antigravityTargetState.canSelect && vsCodeBundleURL != nil))
             && (!gitIsSelected || gitTargetState.canSelect)
             && (!dockerHubIsSelected || dockerHubTargetState.canSelect)
             && (!kubernetesIsSelected || kubernetesTargetState.canSelect)
@@ -316,6 +367,15 @@ final class ProxyViewModel: ObservableObject {
             return "Visual Studio Code was not found."
         }
         return codexTargetState.detail
+    }
+
+    var antigravityTargetDetail: String {
+        if antigravityIsSelected,
+           antigravityTargetState.canSelect,
+           vsCodeBundleURL == nil {
+            return "Visual Studio Code was not found."
+        }
+        return antigravityTargetState.detail
     }
 
     func saveAccessKey() {
@@ -468,6 +528,7 @@ final class ProxyViewModel: ObservableObject {
     func start() {
         guard chromeIsSelected
             || codexIsSelected
+            || antigravityIsSelected
             || gitIsSelected
             || dockerHubIsSelected
             || kubernetesIsSelected
@@ -487,7 +548,12 @@ final class ProxyViewModel: ObservableObject {
             message = "The OpenAI Codex VS Code extension is unavailable."
             return
         }
-        if codexIsSelected {
+        if antigravityIsSelected, !antigravityTargetState.canSelect {
+            state = .error
+            message = "The Google Antigravity VS Code extension is unavailable."
+            return
+        }
+        if codexIsSelected || antigravityIsSelected {
             vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()
             guard vsCodeBundleURL != nil else {
                 state = .error
@@ -567,12 +633,15 @@ final class ProxyViewModel: ObservableObject {
                 accessKey: accessKey,
                 chromeBundlePath: chromeIsSelected ? chrome?.bundleURL.path ?? "" : "",
                 codexEnabled: codexIsSelected,
+                antigravityEnabled: antigravityIsSelected,
                 gitEnabled: gitIsSelected,
                 dockerEnabled: dockerHubIsSelected,
                 kubernetesEnabled: kubernetesIsSelected,
                 containerRegistriesEnabled: containerRegistriesIsSelected,
                 homebrewEnabled: homebrewIsSelected,
-                vsCodeBundlePath: codexIsSelected ? vsCodeBundleURL?.path ?? "" : "",
+                vsCodeBundlePath: (codexIsSelected || antigravityIsSelected)
+                    ? vsCodeBundleURL?.path ?? ""
+                    : "",
                 proxyWebsiteHostnames: effectiveProxyWebsiteHostnames
             ) { [weak self] result in
                 Task { @MainActor in
@@ -607,6 +676,7 @@ final class ProxyViewModel: ObservableObject {
         keyIsSaved = keychain.containsKey()
         chrome = ApplicationDiscovery.findGoogleChrome()
         codexTargetState = CodexTargetDiscovery.discover()
+        antigravityTargetState = AntigravityTargetDiscovery.discover()
         gitTargetState = GitTargetDiscovery.discover()
         dockerHubTargetState = DockerHubTargetDiscovery.discover()
         let dockerBackendTargetState = DockerBackendTargetDiscovery.discover()
@@ -615,6 +685,9 @@ final class ProxyViewModel: ObservableObject {
         homebrewTargetState = HomebrewTargetDiscovery.discover()
         if !codexTargetState.canSelect {
             codexIsSelected = false
+        }
+        if !antigravityTargetState.canSelect {
+            antigravityIsSelected = false
         }
         if !gitTargetState.canSelect {
             gitIsSelected = false
@@ -631,14 +704,19 @@ final class ProxyViewModel: ObservableObject {
         if !homebrewTargetState.canSelect {
             homebrewIsSelected = false
         }
-        if codexIsSelected, codexTargetState.canSelect {
+        refreshSelectedVSCodeBundle()
+        refreshChromeDNSState()
+        refreshChromeECHState()
+        refreshHelperState()
+    }
+
+    private func refreshSelectedVSCodeBundle() {
+        if (codexIsSelected && codexTargetState.canSelect)
+            || (antigravityIsSelected && antigravityTargetState.canSelect) {
             vsCodeBundleURL = ApplicationDiscovery.findVisualStudioCodeBundleURL()
         } else {
             vsCodeBundleURL = nil
         }
-        refreshChromeDNSState()
-        refreshChromeECHState()
-        refreshHelperState()
     }
 
     private enum ChromeECHOperation {

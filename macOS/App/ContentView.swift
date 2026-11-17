@@ -9,6 +9,7 @@ protocol ProxyViewModeling: ObservableObject {
     var googleWebsiteRoutingIsEnabled: Bool { get set }
     var chatGPTWebsiteRoutingIsEnabled: Bool { get set }
     var codexIsSelected: Bool { get set }
+    var antigravityIsSelected: Bool { get set }
     var gitIsSelected: Bool { get set }
     var dockerHubIsSelected: Bool { get set }
     var kubernetesIsSelected: Bool { get set }
@@ -20,6 +21,7 @@ protocol ProxyViewModeling: ObservableObject {
     var keyIsSaved: Bool { get }
     var chrome: DiscoveredApplication? { get }
     var codexTargetState: CodexTargetState { get }
+    var antigravityTargetState: AntigravityTargetState { get }
     var gitTargetState: GitTargetState { get }
     var dockerHubTargetState: DockerHubTargetState { get }
     var kubernetesTargetState: DockerBackendTargetState { get }
@@ -44,6 +46,7 @@ protocol ProxyViewModeling: ObservableObject {
     var chromeLegacyDNSStatusLabel: String? { get }
     var chromeECHStateLabel: String { get }
     var codexTargetDetail: String { get }
+    var antigravityTargetDetail: String { get }
 
     func saveAccessKey()
     func deleteAccessKey()
@@ -67,6 +70,7 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
     @StateObject private var viewModel: ViewModel
     @State private var isEditingAccessKey = false
     @State private var isWebsiteRoutingExpanded: Bool
+    @State private var isDeveloperToolsExpanded = true
 
     init(
         viewModel: ViewModel,
@@ -119,13 +123,8 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("SeparateProxy")
-                .font(.title.bold())
-            Text("Route selected Chrome websites and developer tools through Outline.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
+        Text("SeparateProxy")
+            .font(.title.bold())
     }
 
     private var configurationColumn: some View {
@@ -276,137 +275,121 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
 
     private var websiteRoutingSection: some View {
         SectionSurface {
-            DisclosureGroup(isExpanded: $isWebsiteRoutingExpanded) {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            Text("ECH compatibility:")
-                            Text(viewModel.chromeECHStateLabel)
-                                .foregroundStyle(chromeECHStatusColor)
+            VStack(alignment: .leading, spacing: 0) {
+                CollapsibleSectionHeader(
+                    title: "Chrome Website Routing",
+                    isExpanded: $isWebsiteRoutingExpanded
+                )
+
+                if isWebsiteRoutingExpanded {
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 4) {
+                                Text("ECH compatibility:")
+                                Text(viewModel.chromeECHStateLabel)
+                                    .foregroundStyle(chromeECHStatusColor)
+                            }
+                            .help(viewModel.chromeECHMessage)
+
+                            if let legacyDNSStatus = viewModel.chromeLegacyDNSStatusLabel {
+                                Text(legacyDNSStatus)
+                                    .foregroundStyle(chromeDNSStatusColor)
+                                    .help(viewModel.chromeDNSMessage)
+                            }
                         }
-                        .help(viewModel.chromeECHMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
-                        if let legacyDNSStatus = viewModel.chromeLegacyDNSStatusLabel {
-                            Text(legacyDNSStatus)
-                                .foregroundStyle(chromeDNSStatusColor)
-                                .help(viewModel.chromeDNSMessage)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                        Divider()
 
-                    Divider()
-
-                    HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .center, spacing: 12) {
                             Text("Google")
                                 .font(.body.weight(.medium))
-                            Text("Search, Drive, Account / OAuth, and Gemini")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Toggle(
+                                "Google Website Routing",
+                                isOn: $viewModel.googleWebsiteRoutingIsEnabled
+                            )
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("Google Website Routing")
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Toggle(
-                            "Google Website Routing",
-                            isOn: $viewModel.googleWebsiteRoutingIsEnabled
-                        )
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityLabel("Google Website Routing")
-                    }
+                        Divider()
 
-                    Divider()
-
-                    HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .center, spacing: 12) {
                             Text("ChatGPT")
                                 .font(.body.weight(.medium))
-                            Text("ChatGPT, WebSocket, and response runner")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Toggle(
-                            "ChatGPT Website Routing",
-                            isOn: $viewModel.chatGPTWebsiteRoutingIsEnabled
-                        )
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityLabel("ChatGPT Website Routing")
-                    }
-
-                    Divider()
-
-                    HStack {
-                        Text("Custom Websites")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text(
-                            "\(viewModel.proxyWebsiteHostnames.count) / \(ProxyWebsiteHostnameNormalizer.maximumCustomHostnameCount)"
-                        )
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 8) {
-                        TextField(
-                            "https://example.com/path",
-                            text: $viewModel.proxyWebsiteInput
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Custom Website URL")
-                        .onSubmit {
-                            viewModel.addProxyWebsite()
+                            Toggle(
+                                "ChatGPT Website Routing",
+                                isOn: $viewModel.chatGPTWebsiteRoutingIsEnabled
+                            )
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("ChatGPT Website Routing")
                         }
 
-                        Button("Add") {
-                            viewModel.addProxyWebsite()
-                        }
-                        .disabled(viewModel.proxyWebsiteInput.isEmpty)
-                    }
+                        Divider()
 
-                    if viewModel.proxyWebsiteHostnames.isEmpty {
-                        Text("No custom websites are configured.")
-                            .font(.caption)
+                        HStack {
+                            Text("Custom Websites")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text(
+                                "\(viewModel.proxyWebsiteHostnames.count) / \(ProxyWebsiteHostnameNormalizer.maximumCustomHostnameCount)"
+                            )
+                            .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                    } else {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(viewModel.proxyWebsiteHostnames, id: \.self) { hostname in
-                                HStack(spacing: 8) {
-                                    Text("https://\(hostname)")
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                        .textSelection(.enabled)
-                                        .help("https://\(hostname)")
-                                    Spacer(minLength: 8)
-                                    Button(role: .destructive) {
-                                        viewModel.removeProxyWebsite(hostname)
-                                    } label: {
-                                        Image(systemName: "minus.circle")
-                                            .frame(width: 20, height: 20)
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField(
+                                "https://example.com/path",
+                                text: $viewModel.proxyWebsiteInput
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Custom Website URL")
+                            .onSubmit {
+                                viewModel.addProxyWebsite()
+                            }
+
+                            Button("Add") {
+                                viewModel.addProxyWebsite()
+                            }
+                            .disabled(viewModel.proxyWebsiteInput.isEmpty)
+                        }
+
+                        if !viewModel.proxyWebsiteHostnames.isEmpty {
+                            LazyVStack(alignment: .leading, spacing: 4) {
+                                ForEach(viewModel.proxyWebsiteHostnames, id: \.self) { hostname in
+                                    HStack(spacing: 8) {
+                                        Text("https://\(hostname)")
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                            .textSelection(.enabled)
+                                            .help("https://\(hostname)")
+                                        Spacer(minLength: 8)
+                                        Button(role: .destructive) {
+                                            viewModel.removeProxyWebsite(hostname)
+                                        } label: {
+                                            Image(systemName: "minus.circle")
+                                                .frame(width: 20, height: 20)
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .frame(minWidth: 28, minHeight: 28)
+                                        .contentShape(Rectangle())
+                                        .help("Remove \(hostname)")
+                                        .accessibilityLabel("Remove \(hostname)")
                                     }
-                                    .buttonStyle(.borderless)
-                                    .frame(minWidth: 28, minHeight: 28)
-                                    .contentShape(Rectangle())
-                                    .help("Remove \(hostname)")
-                                    .accessibilityLabel("Remove \(hostname)")
                                 }
                             }
                         }
                     }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Exact hostnames only.")
-                        Text("Changes made while running apply on the next Start.")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .padding(.top, 12)
                 }
-            } label: {
-                Text("Chrome Website Routing")
-                    .font(.headline)
             }
         }
     }
@@ -454,88 +437,105 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
 
     private var developerToolsSection: some View {
         SectionSurface {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Developer Tools")
-                    .font(.headline)
-
-                TargetRow(
-                    title: "Codex",
-                    subtitle: viewModel.codexTargetDetail,
-                    systemImage: "terminal",
-                    status: viewModel.codexTargetState.label,
-                    statusSystemImage: codexStatusIcon,
-                    statusColor: codexStatusColor,
-                    isOn: $viewModel.codexIsSelected,
-                    isEnabled: viewModel.codexTargetState.canSelect
+            VStack(alignment: .leading, spacing: 0) {
+                CollapsibleSectionHeader(
+                    title: "Developer Tools",
+                    isExpanded: $isDeveloperToolsExpanded
                 )
 
-                Divider()
+                if isDeveloperToolsExpanded {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TargetRow(
+                            title: "Codex",
+                            helpText: viewModel.codexTargetDetail,
+                            systemImage: "terminal",
+                            status: viewModel.codexTargetState.label,
+                            statusSystemImage: codexStatusIcon,
+                            statusColor: codexStatusColor,
+                            isOn: $viewModel.codexIsSelected,
+                            isEnabled: viewModel.codexTargetState.canSelect
+                        )
 
-                TargetRow(
-                    title: "Git",
-                    subtitle: viewModel.gitTargetState.detail,
-                    systemImage: "arrow.triangle.branch",
-                    status: viewModel.gitTargetState.label,
-                    statusSystemImage: gitStatusIcon,
-                    statusColor: gitStatusColor,
-                    isOn: $viewModel.gitIsSelected,
-                    isEnabled: viewModel.gitTargetState.canSelect
-                )
+                        Divider()
 
-                Divider()
+                        TargetRow(
+                            title: "Antigravity",
+                            helpText: viewModel.antigravityTargetDetail,
+                            systemImage: "sparkles",
+                            status: viewModel.antigravityTargetState.label,
+                            statusSystemImage: antigravityStatusIcon,
+                            statusColor: antigravityStatusColor,
+                            isOn: $viewModel.antigravityIsSelected,
+                            isEnabled: viewModel.antigravityTargetState.canSelect
+                        )
 
-                TargetRow(
-                    title: "Docker Hub",
-                    subtitle: viewModel.dockerHubTargetState.detail,
-                    tertiaryDetail: viewModel.dockerHubIsSelected
-                        ? "Browser sign-in uses Chrome Website Routing."
-                        : nil,
-                    systemImage: "shippingbox",
-                    status: viewModel.dockerHubTargetState.label,
-                    statusSystemImage: dockerHubStatusIcon,
-                    statusColor: dockerHubStatusColor,
-                    isOn: $viewModel.dockerHubIsSelected,
-                    isEnabled: viewModel.dockerHubTargetState.canSelect
-                )
+                        Divider()
 
-                Divider()
+                        TargetRow(
+                            title: "Git",
+                            helpText: viewModel.gitTargetState.detail,
+                            systemImage: "arrow.triangle.branch",
+                            status: viewModel.gitTargetState.label,
+                            statusSystemImage: gitStatusIcon,
+                            statusColor: gitStatusColor,
+                            isOn: $viewModel.gitIsSelected,
+                            isEnabled: viewModel.gitTargetState.canSelect
+                        )
 
-                TargetRow(
-                    title: "Kubernetes",
-                    subtitle: "Official registry images",
-                    systemImage: "circle.grid.3x3.fill",
-                    status: viewModel.kubernetesTargetState.label,
-                    statusSystemImage: kubernetesStatusIcon,
-                    statusColor: kubernetesStatusColor,
-                    isOn: $viewModel.kubernetesIsSelected,
-                    isEnabled: viewModel.kubernetesTargetState.canSelect
-                )
+                        Divider()
 
-                Divider()
+                        TargetRow(
+                            title: "Docker Hub",
+                            helpText: viewModel.dockerHubTargetState.detail,
+                            systemImage: "shippingbox",
+                            status: viewModel.dockerHubTargetState.label,
+                            statusSystemImage: dockerHubStatusIcon,
+                            statusColor: dockerHubStatusColor,
+                            isOn: $viewModel.dockerHubIsSelected,
+                            isEnabled: viewModel.dockerHubTargetState.canSelect
+                        )
 
-                TargetRow(
-                    title: "Container Registries",
-                    subtitle: "Google Container Registry",
-                    systemImage: "server.rack",
-                    status: viewModel.containerRegistriesTargetState.label,
-                    statusSystemImage: containerRegistriesStatusIcon,
-                    statusColor: containerRegistriesStatusColor,
-                    isOn: $viewModel.containerRegistriesIsSelected,
-                    isEnabled: viewModel.containerRegistriesTargetState.canSelect
-                )
+                        Divider()
 
-                Divider()
+                        TargetRow(
+                            title: "Kubernetes",
+                            helpText: "Official registry images",
+                            systemImage: "circle.grid.3x3.fill",
+                            status: viewModel.kubernetesTargetState.label,
+                            statusSystemImage: kubernetesStatusIcon,
+                            statusColor: kubernetesStatusColor,
+                            isOn: $viewModel.kubernetesIsSelected,
+                            isEnabled: viewModel.kubernetesTargetState.canSelect
+                        )
 
-                TargetRow(
-                    title: "Homebrew",
-                    subtitle: viewModel.homebrewTargetState.detail,
-                    systemImage: "archivebox",
-                    status: viewModel.homebrewTargetState.label,
-                    statusSystemImage: homebrewStatusIcon,
-                    statusColor: homebrewStatusColor,
-                    isOn: $viewModel.homebrewIsSelected,
-                    isEnabled: viewModel.homebrewTargetState.canSelect
-                )
+                        Divider()
+
+                        TargetRow(
+                            title: "Container Registries",
+                            helpText: "Google Container Registry",
+                            systemImage: "server.rack",
+                            status: viewModel.containerRegistriesTargetState.label,
+                            statusSystemImage: containerRegistriesStatusIcon,
+                            statusColor: containerRegistriesStatusColor,
+                            isOn: $viewModel.containerRegistriesIsSelected,
+                            isEnabled: viewModel.containerRegistriesTargetState.canSelect
+                        )
+
+                        Divider()
+
+                        TargetRow(
+                            title: "Homebrew",
+                            helpText: viewModel.homebrewTargetState.detail,
+                            systemImage: "archivebox",
+                            status: viewModel.homebrewTargetState.label,
+                            statusSystemImage: homebrewStatusIcon,
+                            statusColor: homebrewStatusColor,
+                            isOn: $viewModel.homebrewIsSelected,
+                            isEnabled: viewModel.homebrewTargetState.canSelect
+                        )
+                    }
+                    .padding(.top, 12)
+                }
             }
         }
     }
@@ -632,6 +632,28 @@ struct ContentView<ViewModel: ProxyViewModeling>: View {
         switch viewModel.codexTargetState {
         case .installed:
             return "checkmark.circle.fill"
+        case .notInstalled:
+            return "minus.circle"
+        case .incompleteInstallation, .unsupportedInstallation:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var antigravityStatusColor: Color {
+        switch viewModel.antigravityTargetState {
+        case let .installed(installation):
+            return installation.backendState == .installed ? .green : .orange
+        case .notInstalled, .incompleteInstallation, .unsupportedInstallation:
+            return .orange
+        }
+    }
+
+    private var antigravityStatusIcon: String {
+        switch viewModel.antigravityTargetState {
+        case let .installed(installation):
+            return installation.backendState == .installed
+                ? "checkmark.circle.fill"
+                : "arrow.down.circle"
         case .notInstalled:
             return "minus.circle"
         case .incompleteInstallation, .unsupportedInstallation:
@@ -838,6 +860,36 @@ private struct SectionSurface<Content: View>: View {
     }
 }
 
+private struct CollapsibleSectionHeader: View {
+    let title: String
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+
+                Text(title)
+                    .font(.headline)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+    }
+}
+
 private struct SurfaceBackground: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -867,8 +919,7 @@ private struct StatusBadge: View {
 
 private struct TargetRow: View {
     let title: String
-    let subtitle: String
-    var tertiaryDetail: String? = nil
+    let helpText: String
     let systemImage: String
     let status: String
     let statusSystemImage: String
@@ -877,28 +928,16 @@ private struct TargetRow: View {
     let isEnabled: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 24, height: 24)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.body.weight(.medium))
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let tertiaryDetail {
-                    Text(tertiaryDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(title)
+                .font(.body.weight(.medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             StatusBadge(
                 title: status,
@@ -914,6 +953,7 @@ private struct TargetRow: View {
         }
         .padding(.vertical, 2)
         .opacity(isEnabled ? 1 : 0.68)
+        .help(helpText)
     }
 }
 
@@ -973,6 +1013,15 @@ private enum PreviewProxyFixtures {
         )
     )
 
+    static let antigravityInstalled = AntigravityTargetState.installed(
+        AntigravityInstallation(
+            version: "1.12.0",
+            extensionRootPath: "/Preview/VSCode/extensions/google.google-antigravity",
+            agyExecutablePath: "/Preview/.gemini/bin/agy",
+            backendState: .installed
+        )
+    )
+
     static let gitInstalled = GitTargetState.installed(
         AppleGitInstallation(
             developerDirectoryPath: "/Preview/Xcode/Contents/Developer",
@@ -1020,6 +1069,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
     @Published var googleWebsiteRoutingIsEnabled = true
     @Published var chatGPTWebsiteRoutingIsEnabled = true
     @Published var codexIsSelected = true
+    @Published var antigravityIsSelected = true
     @Published var gitIsSelected = true
     @Published var dockerHubIsSelected = true
     @Published var kubernetesIsSelected = true
@@ -1031,6 +1081,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
     @Published var keyIsSaved = true
     @Published var chrome: DiscoveredApplication? = PreviewProxyFixtures.chrome
     @Published var codexTargetState = PreviewProxyFixtures.codexInstalled
+    @Published var antigravityTargetState = PreviewProxyFixtures.antigravityInstalled
     @Published var gitTargetState = PreviewProxyFixtures.gitInstalled
     @Published var dockerHubTargetState = PreviewProxyFixtures.dockerInstalled
     @Published var kubernetesTargetState = PreviewProxyFixtures.dockerBackendInstalled
@@ -1060,12 +1111,14 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
             clearTrafficRates()
         case .missingTools:
             codexIsSelected = false
+            antigravityIsSelected = false
             gitIsSelected = false
             dockerHubIsSelected = false
             kubernetesIsSelected = false
             containerRegistriesIsSelected = false
             homebrewIsSelected = false
             codexTargetState = .notInstalled
+            antigravityTargetState = .notInstalled
             gitTargetState = .notFound
             dockerHubTargetState = .notFound
             kubernetesTargetState = .notFound
@@ -1084,6 +1137,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
         let canRetry = state == .stopped || state == .error
         let hasSelection = chromeIsSelected
             || codexIsSelected
+            || antigravityIsSelected
             || gitIsSelected
             || dockerHubIsSelected
             || kubernetesIsSelected
@@ -1091,6 +1145,7 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
             || homebrewIsSelected
         let selectedTargetsAreAvailable = (!chromeIsSelected || chrome != nil)
             && (!codexIsSelected || codexTargetState.canSelect)
+            && (!antigravityIsSelected || antigravityTargetState.canSelect)
             && (!gitIsSelected || gitTargetState.canSelect)
             && (!dockerHubIsSelected || dockerHubTargetState.canSelect)
             && (!kubernetesIsSelected || kubernetesTargetState.canSelect)
@@ -1155,6 +1210,10 @@ private final class PreviewProxyViewModel: ProxyViewModeling {
 
     var codexTargetDetail: String {
         codexTargetState.detail
+    }
+
+    var antigravityTargetDetail: String {
+        antigravityTargetState.detail
     }
 
     func saveAccessKey() {

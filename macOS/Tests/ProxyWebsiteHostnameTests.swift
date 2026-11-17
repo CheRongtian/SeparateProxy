@@ -127,8 +127,8 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
         )
     }
 
-    func testGoogleWebsiteRoutingContainsExactlyTheFrozenElevenExactHostnames() throws {
-        XCTAssertEqual(GoogleWebsiteRouting.hostnames.count, 11)
+    func testGoogleWebsiteRoutingContainsExactlyTheFrozenFifteenExactHostnames() throws {
+        XCTAssertEqual(GoogleWebsiteRouting.hostnames.count, 15)
         XCTAssertEqual(Set(GoogleWebsiteRouting.hostnames), Set([
             "google.com",
             "www.google.com",
@@ -141,6 +141,10 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
             "gemini.google.com",
             "jnn-pa.googleapis.com",
             "www.googleapis.com",
+            "geminiweb-pa.clients6.google.com",
+            "www.gstatic.com",
+            "gemini.gstatic.com",
+            "waa-pa.clients6.google.com",
         ]))
         XCTAssertEqual(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(
@@ -196,7 +200,7 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
         XCTAssertEqual(effective.filter { $0 == "accounts.google.com" }.count, 1)
     }
 
-    func testGoogleWebsiteRoutingAcceptsOneHundredCustomPlusElevenBuiltIn() throws {
+    func testGoogleWebsiteRoutingAcceptsOneHundredCustomPlusFifteenBuiltIn() throws {
         let customHostnames = (0..<100).map { "host\($0).example" }
         let effective = try ChromeWebsiteRouting.effectiveHostnames(
             customHostnames: customHostnames,
@@ -204,7 +208,7 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
             chatGPTIsEnabled: false
         )
 
-        XCTAssertEqual(effective.count, 111)
+        XCTAssertEqual(effective.count, 115)
         XCTAssertEqual(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(effective),
             effective
@@ -225,14 +229,14 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
         }
     }
 
-    func testEffectiveListAcceptsOneHundredFifteenAndRejectsOneHundredSixteen() throws {
-        let accepted = (0..<115).map { "host\($0).example" }
+    func testEffectiveListAcceptsOneHundredNineteenAndRejectsOneHundredTwenty() throws {
+        let accepted = (0..<119).map { "host\($0).example" }
         XCTAssertEqual(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(accepted),
             accepted.sorted()
         )
 
-        let rejected = (0..<116).map { "host\($0).example" }
+        let rejected = (0..<120).map { "host\($0).example" }
         XCTAssertThrowsError(
             try ProxyWebsiteHostnameNormalizer.validateEffectiveNormalizedList(rejected)
         ) { error in
@@ -362,7 +366,7 @@ final class ProxyWebsiteHostnameTests: XCTestCase {
                 + GoogleWebsiteRouting.hostnames.count
                 + ChatGPTWebsiteRouting.hostnames.count
         )
-        XCTAssertEqual(effective.count, 115)
+        XCTAssertEqual(effective.count, 119)
     }
 
     func testChatGPTSwitchRequiresHostnameVisibilityOnlyWhenChromeIsSelected() {

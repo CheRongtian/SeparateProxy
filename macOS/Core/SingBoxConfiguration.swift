@@ -140,6 +140,7 @@ public struct SingBoxConfiguration: Codable, Equatable, Sendable {
 public enum SingBoxConfigurationError: LocalizedError, Equatable {
     case invalidChromeBundlePath
     case invalidCodexExecutablePath
+    case invalidAntigravityExecutablePath
     case invalidVSCodePluginHelperExecutablePath
     case invalidGitHelperPaths
     case invalidDockerHubInstallation
@@ -151,6 +152,8 @@ public enum SingBoxConfigurationError: LocalizedError, Equatable {
             return "The Google Chrome application path is invalid."
         case .invalidCodexExecutablePath:
             return "The Codex executable path is invalid."
+        case .invalidAntigravityExecutablePath:
+            return "The Antigravity agy executable path is invalid."
         case .invalidVSCodePluginHelperExecutablePath:
             return "The Visual Studio Code Plugin Helper executable path is invalid."
         case .invalidGitHelperPaths:
@@ -169,6 +172,7 @@ public enum SingBoxConfigurationBuilder {
         chromeBundlePath: String?,
         codexExecutablePath: String? = nil,
         vsCodePluginHelperExecutablePath: String? = nil,
+        antigravityExecutablePath: String? = nil,
         gitInstallation: AppleGitInstallation? = nil,
         dockerHubInstallation: DockerHubInstallation? = nil,
         kubernetesInstallation: DockerDesktopBackendInstallation? = nil,
@@ -179,6 +183,7 @@ public enum SingBoxConfigurationBuilder {
     ) throws -> SingBoxConfiguration {
         guard chromeBundlePath != nil
             || codexExecutablePath != nil
+            || antigravityExecutablePath != nil
             || gitInstallation != nil
             || dockerHubInstallation != nil
             || kubernetesInstallation != nil
@@ -186,7 +191,9 @@ public enum SingBoxConfigurationBuilder {
             || homebrewEnabled else {
             throw SingBoxConfigurationError.noTargetsSelected
         }
-        guard (codexExecutablePath == nil) == (vsCodePluginHelperExecutablePath == nil) else {
+        let needsVSCodePluginHelper = codexExecutablePath != nil
+            || antigravityExecutablePath != nil
+        guard needsVSCodePluginHelper == (vsCodePluginHelperExecutablePath != nil) else {
             throw SingBoxConfigurationError.invalidVSCodePluginHelperExecutablePath
         }
         guard homebrewEnabled || homebrewGitInstallation == nil else {
@@ -205,8 +212,27 @@ public enum SingBoxConfigurationBuilder {
         }
         if let codexExecutablePath {
             rules += try makeCodexRules(
-                executablePath: codexExecutablePath,
-                vsCodePluginHelperExecutablePath: vsCodePluginHelperExecutablePath!
+                executablePath: codexExecutablePath
+            )
+        }
+        if let antigravityExecutablePath {
+            rules += try makeAntigravityRules(
+                executablePath: antigravityExecutablePath
+            )
+        }
+        if let vsCodePluginHelperExecutablePath {
+            var sharedHostnames: [String] = []
+            if codexExecutablePath != nil {
+                sharedHostnames.append("chatgpt.com")
+            }
+            if antigravityExecutablePath != nil {
+                sharedHostnames.append(
+                    contentsOf: AntigravityRouting.extensionHostDownloadHostnames
+                )
+            }
+            rules += try makeVSCodePluginHelperRules(
+                executablePath: vsCodePluginHelperExecutablePath,
+                hostnames: Array(Set(sharedHostnames)).sorted()
             )
         }
         if let gitInstallation {
@@ -375,8 +401,7 @@ public enum SingBoxConfigurationBuilder {
     }
 
     private static func makeCodexRules(
-        executablePath: String,
-        vsCodePluginHelperExecutablePath: String
+        executablePath: String
     ) throws -> [SingBoxConfiguration.Route.Rule] {
         guard executablePath.hasPrefix("/"),
               URL(fileURLWithPath: executablePath).lastPathComponent == "codex",
@@ -390,19 +415,6 @@ public enum SingBoxConfigurationBuilder {
         let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
             .replacingOccurrences(of: #"\/"#, with: "/")
         let processPathRegex = ["^\(escapedPath)$"]
-        guard vsCodePluginHelperExecutablePath.hasPrefix("/"),
-              URL(fileURLWithPath: vsCodePluginHelperExecutablePath).lastPathComponent == "Code Helper (Plugin)",
-              !vsCodePluginHelperExecutablePath.contains("\n"),
-              !vsCodePluginHelperExecutablePath.contains("\0") else {
-            throw SingBoxConfigurationError.invalidVSCodePluginHelperExecutablePath
-        }
-        let normalizedVSCodeHelperPath = URL(
-            fileURLWithPath: vsCodePluginHelperExecutablePath
-        ).standardizedFileURL.path
-        let escapedVSCodeHelperPath = NSRegularExpression.escapedPattern(
-            for: normalizedVSCodeHelperPath
-        ).replacingOccurrences(of: #"\/"#, with: "/")
-        let vsCodeHelperProcessPathRegex = ["^\(escapedVSCodeHelperPath)$"]
         return [
             .init(
                 processPathRegex: processPathRegex,
@@ -417,24 +429,86 @@ public enum SingBoxConfigurationBuilder {
                 action: "route",
                 outbound: "outline"
             ),
+        ]
+    }
+
+    private static func makeAntigravityRules(
+        executablePath: String
+    ) throws -> [SingBoxConfiguration.Route.Rule] {
+        guard executablePath.hasPrefix("/"),
+              URL(fileURLWithPath: executablePath).lastPathComponent == "agy",
+              !executablePath.contains("\n"),
+              !executablePath.contains("\0") else {
+            throw SingBoxConfigurationError.invalidAntigravityExecutablePath
+        }
+
+        let normalizedPath = URL(fileURLWithPath: executablePath)
+            .standardizedFileURL.path
+        let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
+            .replacingOccurrences(of: #"\/"#, with: "/")
+        let processPathRegex = ["^\(escapedPath)$"]
+        var rules: [SingBoxConfiguration.Route.Rule] = [
             .init(
-                processPathRegex: vsCodeHelperProcessPathRegex,
+                processPathRegex: processPathRegex,
                 network: "tcp",
                 destinationPort: 443,
                 action: "sniff",
                 sniffer: ["tls"]
             ),
-            .init(
-                processPathRegex: vsCodeHelperProcessPathRegex,
+        ]
+        for hostname in AntigravityRouting.serviceHostnames.sorted() {
+            rules.append(.init(
+                processPathRegex: processPathRegex,
                 network: "tcp",
                 destinationPort: 443,
                 action: "route",
                 protocolName: "tls",
-                domains: ["chatgpt.com"],
-                overrideAddress: "chatgpt.com",
+                domains: [hostname],
+                overrideAddress: hostname,
                 outbound: "outline"
+            ))
+        }
+        return rules
+    }
+
+    private static func makeVSCodePluginHelperRules(
+        executablePath: String,
+        hostnames: [String]
+    ) throws -> [SingBoxConfiguration.Route.Rule] {
+        guard executablePath.hasPrefix("/"),
+              URL(fileURLWithPath: executablePath).lastPathComponent == "Code Helper (Plugin)",
+              !executablePath.contains("\n"),
+              !executablePath.contains("\0"),
+              !hostnames.isEmpty else {
+            throw SingBoxConfigurationError.invalidVSCodePluginHelperExecutablePath
+        }
+        let normalizedPath = URL(fileURLWithPath: executablePath)
+            .standardizedFileURL.path
+        let escapedPath = NSRegularExpression.escapedPattern(for: normalizedPath)
+            .replacingOccurrences(of: #"\/"#, with: "/")
+        let processPathRegex = ["^\(escapedPath)$"]
+        var rules: [SingBoxConfiguration.Route.Rule] = [
+            .init(
+                processPathRegex: processPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "sniff",
+                sniffer: ["tls"]
             ),
         ]
+        for hostname in Array(Set(hostnames)).sorted() {
+            rules.append(.init(
+                processPathRegex: processPathRegex,
+                network: "tcp",
+                destinationPort: 443,
+                action: "route",
+                protocolName: "tls",
+                domains: [hostname],
+                overrideAddress: hostname,
+                outbound: "outline"
+            ))
+        }
+        return rules
     }
 
     private static func makeGitRules(
